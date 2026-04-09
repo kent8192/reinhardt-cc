@@ -12,7 +12,7 @@ use reinhardt::views::prelude::*;
 #[get("/users/{id}/", name = "user_retrieve")]
 pub async fn get_user(
     Path(id): Path<i64>,
-    #[inject] db: Inject<DatabaseConnection>,
+    #[inject] db: Depends<DatabaseConnection>,
 ) -> ViewResult<Response> {
     let user = User::objects()
         .filter(User::id.eq(id))
@@ -32,7 +32,7 @@ pub async fn get_user(
 #[post("/transfers/", name = "transfer_create")]
 pub async fn transfer_funds(
     Json(data): Json<TransferRequest>,
-    #[inject] db: Inject<DatabaseConnection>,
+    #[inject] db: Depends<DatabaseConnection>,
 ) -> ViewResult<Response> {
 
     // Begin a transaction
@@ -138,7 +138,7 @@ use reinhardt::views::prelude::*;
 
 #[get("/cart/", name = "cart_get")]
 pub async fn get_cart(
-    #[inject] session: Inject<Session>,
+    #[inject] session: Depends<Session>,
 ) -> ViewResult<Response> {
     let cart: Option<Cart> = session.get("cart").await?;
     let body = match cart {
@@ -153,7 +153,7 @@ pub async fn get_cart(
 #[post("/cart/items/", name = "cart_add_item")]
 pub async fn add_to_cart(
     Json(item): Json<CartItem>,
-    #[inject] session: Inject<Session>,
+    #[inject] session: Depends<Session>,
 ) -> ViewResult<Response> {
     let mut cart: Cart = session
         .get("cart")
@@ -177,9 +177,9 @@ Handlers can receive any combination of injectable types:
 #[post("/orders/", name = "order_create")]
 pub async fn create_order(
     #[inject] AuthInfo(state): AuthInfo,
-    #[inject] db: Inject<DatabaseConnection>,
-    #[inject] email_service: Inject<Arc<EmailService>>,
-    #[inject] session: Inject<Session>,
+    #[inject] db: Depends<DatabaseConnection>,
+    #[inject] email_service: Depends<EmailService>,
+    #[inject] session: Depends<Session>,
 ) -> ViewResult<Response> {
     let cart: Cart = session
         .get("cart")
@@ -217,7 +217,7 @@ use std::sync::Arc;
 #[injectable(scope = Singleton)]
 pub struct UserRepository {
     #[inject]
-    pool: Arc<DatabaseConnection>,
+    pool: Depends<DatabaseConnection>,
 }
 
 impl UserRepository {
@@ -262,7 +262,7 @@ impl UserRepository {
 ```rust
 #[get("/users/", name = "user_list")]
 pub async fn list_users(
-    #[inject] user_repo: Inject<UserRepository>,
+    #[inject] user_repo: Depends<UserRepository>,
 ) -> ViewResult<Response> {
     let users = user_repo.find_active().await?;
     Ok(Response::new(StatusCode::OK)
@@ -273,7 +273,7 @@ pub async fn list_users(
 #[get("/users/by-email/{email}/", name = "user_by_email")]
 pub async fn find_by_email(
     Path(email): Path<String>,
-    #[inject] user_repo: Inject<UserRepository>,
+    #[inject] user_repo: Depends<UserRepository>,
 ) -> ViewResult<Response> {
     let user = user_repo
         .find_by_email(&email)
@@ -293,9 +293,9 @@ pub async fn find_by_email(
 #[injectable(scope = Singleton)]
 pub struct UserService {
     #[inject]
-    repo: Arc<UserRepository>,
+    repo: Depends<UserRepository>,
     #[inject]
-    email: Arc<EmailService>,
+    email: Depends<EmailService>,
 }
 
 impl UserService {
