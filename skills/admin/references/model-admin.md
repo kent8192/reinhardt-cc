@@ -47,11 +47,11 @@ use crate::models::User;
 #[admin(model,
     for = User,
     name = "User",
-    list_display = [id, username, email, is_active, is_staff, date_joined],
-    list_filter = [is_active, is_staff],
+    list_display = [id, username, email, is_active, is_staff, is_superuser, last_login, date_joined],
+    list_filter = [is_active, is_staff, is_superuser],
     search_fields = [username, email],
     ordering = [(date_joined, desc)],
-    readonly_fields = [id, date_joined, last_login],
+    readonly_fields = [id, password_hash, last_login, date_joined, updated_at],
     list_per_page = 25,
     permissions = allow_all
 )]
@@ -87,14 +87,21 @@ use reinhardt::admin::ModelAdmin;
 
 pub trait ModelAdmin: Send + Sync {
     fn model_name(&self) -> &str;
-    fn table_name(&self) -> &str;
+    fn table_name(&self) -> &str { "" }
     fn pk_field(&self) -> &str { "id" }
     fn list_display(&self) -> Vec<&str> { vec!["id"] }
     fn list_filter(&self) -> Vec<&str> { vec![] }
     fn search_fields(&self) -> Vec<&str> { vec![] }
+    fn fields(&self) -> Option<Vec<&str>> { None }
     fn readonly_fields(&self) -> Vec<&str> { vec![] }
-    fn list_per_page(&self) -> usize { 25 }
-    // ... more methods
+    fn ordering(&self) -> Vec<&str> { vec![] }
+    fn list_per_page(&self) -> Option<usize> { None }
+
+    // Permission methods
+    async fn has_view_permission(&self, user: &dyn AdminUser) -> bool { true }
+    async fn has_add_permission(&self, user: &dyn AdminUser) -> bool { true }
+    async fn has_change_permission(&self, user: &dyn AdminUser) -> bool { true }
+    async fn has_delete_permission(&self, user: &dyn AdminUser) -> bool { true }
 }
 ```
 

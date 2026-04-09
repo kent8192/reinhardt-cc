@@ -34,7 +34,7 @@ Guide developers through setting up and customizing the reinhardt admin panel fo
 ## Important Rules
 
 - Always set `set_user_type` and `set_jwt_secret` for admin auth
-- Use `admin_routes_with_di_deferred` for DI-compatible admin routing
+- Use `admin_routes_with_di` for DI-compatible admin routing
 - Mount admin at `/admin/` and static files at `/static/admin/`
 - Feature flag: `admin` must be enabled in Cargo.toml
 

@@ -44,21 +44,23 @@ pub fn configure_admin() -> AdminSite {
 | `AdminSite::new(title)` | Create with display title |
 | `.set_user_type::<U>()` | Set user model for authentication |
 | `.set_jwt_secret(bytes)` | Set JWT secret for admin auth tokens |
+| `.set_url_prefix(prefix)` | Set URL prefix for admin routes |
+| `.set_favicon(data)` | Set custom favicon data |
 | `.register(name, admin)` | Register a ModelAdmin instance |
 | `.unregister(name)` | Remove a registered ModelAdmin |
 | `.registered_models()` | List all registered model names |
 
 ## Mounting in Router
 
-Use `admin_routes_with_di_deferred` for DI-compatible routing:
+Use `admin_routes_with_di` for DI-compatible routing:
 
 ```rust
-use reinhardt::admin::{admin_routes_with_di_deferred, core::admin_static_routes};
+use reinhardt::admin::{admin_routes_with_di, core::admin_static_routes};
 
 #[routes]
 pub fn routes() -> UnifiedRouter {
     let admin_site = Arc::new(configure_admin());
-    let (admin_router, admin_di) = admin_routes_with_di_deferred(admin_site);
+    let (admin_router, admin_di) = admin_routes_with_di(admin_site);
 
     UnifiedRouter::new()
         .mount("/admin/", admin_router)
@@ -70,8 +72,8 @@ pub fn routes() -> UnifiedRouter {
 
 ### Key Points
 
-- Wrap `AdminSite` in `Arc` before passing to `admin_routes_with_di_deferred`
-- The function returns a tuple: `(Router, DI registrations)`
+- Wrap `AdminSite` in `Arc` before passing to `admin_routes_with_di`
+- The function returns a tuple: `(ServerRouter, DiRegistrationList)`
 - Mount admin routes at `/admin/` (conventional path)
 - Mount admin static files at `/static/admin/` for CSS/JS assets
 - Call `.with_di_registrations(admin_di)` to wire admin services into the DI container
@@ -97,9 +99,9 @@ fn get_jwt_secret() -> Option<String> {
 
 ```rust
 use std::sync::Arc;
-use reinhardt::admin::{AdminSite, admin_routes_with_di_deferred, core::admin_static_routes};
+use reinhardt::admin::{AdminSite, admin_routes_with_di, core::admin_static_routes};
 use reinhardt::routes;
-use reinhardt::router::UnifiedRouter;
+use reinhardt::urls::prelude::UnifiedRouter;
 
 // 1. Define ModelAdmin structs (see model-admin.md)
 // 2. Configure AdminSite
@@ -120,7 +122,7 @@ pub fn configure_admin() -> AdminSite {
 #[routes]
 pub fn routes() -> UnifiedRouter {
     let admin_site = Arc::new(configure_admin());
-    let (admin_router, admin_di) = admin_routes_with_di_deferred(admin_site);
+    let (admin_router, admin_di) = admin_routes_with_di(admin_site);
 
     UnifiedRouter::new()
         .mount("/admin/", admin_router)
