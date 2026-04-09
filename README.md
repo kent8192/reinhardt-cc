@@ -23,12 +23,14 @@ Claude Code plugin for [reinhardt-web](https://github.com/kent8192/reinhardt-web
 | `api-development` | "create an API", "add a view", "configure routes" | Serializers, views, URL routing, authentication, and pagination following reinhardt REST conventions |
 | `testing` | "write tests", "add test coverage", "test this endpoint" | rstest-based test generation with AAA pattern, reinhardt-test fixtures, and TestContainers integration |
 | `dependency-injection` | "configure DI", "inject a service", "add a provider" | DI container configuration, provider scoping, `#[inject]` handler patterns, and database/auth integration |
+| `migration` | "upgrade reinhardt", "migrate", "deprecated", "breaking change", "rc.XX" | Version upgrade analysis via CHANGELOG, deprecated API detection, and guided code migration |
 
 ### Command
 
 | Command | Description |
 |---------|-------------|
 | `/reinhardt-new` | Interactive guided workflow for creating a new reinhardt-web project with feature flag selection, database backend, and authentication setup |
+| `/reinhardt-upgrade` | Guided reinhardt-web version upgrade with breaking change detection, deprecated API migration, and verification |
 
 ### Agents
 
@@ -36,6 +38,7 @@ Claude Code plugin for [reinhardt-web](https://github.com/kent8192/reinhardt-web
 |-------|-------------|
 | `test-generator` | Generates reinhardt-compliant tests using rstest, AAA pattern, and reinhardt-test fixtures. Specialized in TestContainers integration and API testing. |
 | `code-reviewer` | Reviews Rust code for reinhardt-specific anti-patterns, convention violations, and best practice adherence across module system, DI, ORM, API design, testing, and documentation. |
+| `migration-analyzer` | Analyzes reinhardt version upgrade impact by cross-referencing CHANGELOG entries, GitHub PR/Issue descriptions, deprecated API annotations, and application code usage. |
 
 ### Hooks
 
