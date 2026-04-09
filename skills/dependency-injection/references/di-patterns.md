@@ -130,53 +130,67 @@ pub async fn get_dashboard_data(user_id: i64) -> Result<DashboardData, ServerFnE
 
 ## Scoping
 
-Reinhardt DI supports two scopes. The resolver checks request scope first, then falls back to singleton scope.
+Reinhardt DI supports three scopes, declared via `#[injectable]` or `#[injectable_factory]` macros:
 
-| Scope | Lifetime | Registration | Use Case |
-|-------|----------|--------------|----------|
-| Request-scoped | One per HTTP request | `app.inject_request::<T>()` | Per-request state, database transactions, auth context |
-| Singleton | One for app lifetime | `app.inject_singleton::<T>(instance)` | Shared services, connection pools, configuration |
+| Scope | Lifetime | Declaration | Use Case |
+|-------|----------|-------------|----------|
+| Singleton | One for app lifetime | `scope = Singleton` / `scope = "singleton"` | Shared services, connection pools, configuration |
+| Request | One per HTTP request | `scope = Request` / `scope = "request"` | Per-request state, auth context |
+| Transient | New instance each time | `scope = Transient` / `scope = "transient"` | Stateless helpers, short-lived objects |
 
-### Request-Scoped Registration
+### `#[injectable]` for Structs
+
+Declare scope directly on the struct:
 
 ```rust
-use reinhardt::prelude::*;
+use reinhardt::di::prelude::*;
 
-let app = Reinhardt::new()
-    .inject_request::<RequestLogger>()
-    .inject_request::<TransactionContext>();
+#[injectable(scope = Singleton)]
+pub struct AppConfig {
+    #[no_inject]
+    pub database_url: String,
+    #[no_inject]
+    pub debug: bool,
+}
+
+#[injectable(scope = Request)]
+pub struct RequestLogger {
+    #[inject]
+    config: AppConfig,
+}
 ```
 
-A new instance is created for each request and dropped when the request completes.
+### `#[injectable_factory]` for Functions
 
-### Singleton Registration
+Use when construction logic is complex or requires async initialization:
 
 ```rust
-let email_service = Arc::new(EmailService::new("api-key"));
-let cache = Arc::new(CacheService::connect("redis://localhost").await);
+use reinhardt::di::prelude::*;
 
-let app = Reinhardt::new()
-    .inject_singleton::<Arc<EmailService>>(email_service)
-    .inject_singleton::<Arc<CacheService>>(cache);
+#[injectable_factory(scope = "singleton")]
+async fn create_database(#[inject] config: Arc<AppConfig>) -> DatabaseConnection {
+    DatabaseConnection::connect(&config.database_url).await.unwrap()
+}
+
+#[injectable_factory(scope = "singleton")]
+async fn create_email_service(#[inject] config: Arc<AppConfig>) -> EmailService {
+    EmailService::new(&config.email_api_key)
+}
 ```
 
-Singleton instances are shared across all requests. Wrap in `Arc<T>` for thread-safe sharing.
+**Rules for `#[injectable_factory]`:**
+- Function MUST be `async`
+- Function MUST have an explicit return type
+- ALL parameters MUST be marked with `#[inject]`
+- Scope is specified as a string: `"singleton"`, `"request"`, `"transient"`
 
-## `Arc<T>` Wrapping
-
-Services registered as singletons should always be wrapped in `Arc<T>`:
+### Using Injected Services in Handlers
 
 ```rust
-// Registration
-let service = Arc::new(UserService::new(pool.clone()));
-app.inject_singleton::<Arc<UserService>>(service);
-
-// Injection in handler
 #[get("/users/", name = "user_list")]
 pub async fn list_users(
     #[inject] user_service: Inject<Arc<UserService>>,
 ) -> ViewResult<Response> {
-    // user_service is Arc<UserService> — clone is cheap
     let users = user_service.list_all().await?;
     Ok(Response::new(StatusCode::OK)
         .with_header("Content-Type", "application/json")
@@ -184,10 +198,23 @@ pub async fn list_users(
 }
 ```
 
-**Why `Arc<T>`:**
-- Singleton services are shared across threads
-- `Arc` provides thread-safe reference counting
-- Cloning `Arc` is cheap (atomic increment)
+## `Arc<T>` Wrapping
+
+Singleton services are resolved as `Arc<T>`. Factory parameters and handler injection can receive either `Arc<T>` or `T` (cloned from Arc):
+
+```rust
+// Factory receives Arc<T> — no clone, just reference counting
+#[injectable_factory(scope = "singleton")]
+async fn create_user_service(#[inject] config: Arc<AppConfig>) -> UserService {
+    UserService::new(config)
+}
+
+// Factory receives T (non-Arc) — cloned out of Arc automatically
+#[injectable_factory(scope = "transient")]
+async fn make_handler(#[inject] service: MyService) -> String {
+    service.value
+}
+```
 
 ## Avoiding Circular Dependencies
 

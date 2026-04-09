@@ -213,18 +213,11 @@ use reinhardt::di::prelude::*;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+/// Register as singleton via `#[injectable]` macro with `#[inject]` fields.
+#[injectable(scope = Singleton)]
 pub struct UserRepository {
-    pool: Arc<PgPool>,
-}
-
-#[async_trait]
-impl Injectable for UserRepository {
-    async fn resolve(ctx: &InjectionContext) -> Result<Self, InjectionError> {
-        let db = ctx.resolve::<DatabaseConnection>().await?;
-        Ok(Self {
-            pool: db.pool().clone(),
-        })
-    }
+    #[inject]
+    pool: Arc<DatabaseConnection>,
 }
 
 impl UserRepository {
@@ -296,18 +289,13 @@ pub async fn find_by_email(
 ### Service Layer on Top of Repository
 
 ```rust
+/// Use `#[injectable]` with `#[inject]` fields for automatic dependency resolution.
+#[injectable(scope = Singleton)]
 pub struct UserService {
+    #[inject]
     repo: Arc<UserRepository>,
+    #[inject]
     email: Arc<EmailService>,
-}
-
-#[async_trait]
-impl Injectable for UserService {
-    async fn resolve(ctx: &InjectionContext) -> Result<Self, InjectionError> {
-        let repo = Arc::new(ctx.resolve::<UserRepository>().await?);
-        let email = ctx.resolve::<Arc<EmailService>>().await?;
-        Ok(Self { repo, email })
-    }
 }
 
 impl UserService {
