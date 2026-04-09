@@ -1,10 +1,300 @@
 # Reinhardt QuerySet API Reference
 
-All database operations use `reinhardt-query` for type-safe query construction. NEVER use raw SQL strings.
+Reinhardt provides two query APIs at different abstraction levels:
 
-## Schema Operations (DDL)
+1. **ORM API** (`Model::objects()`) — Django-style, recommended for application code
+2. **Low-Level Query Builder** (`reinhardt-query`) — SeaQuery-based, for migrations and raw schema operations
 
-### CREATE TABLE
+---
+
+## ORM API: Model::objects()
+
+The `Model` trait provides an `objects()` method that returns a `Manager<M>`, which is the entry point for all database operations. Manager methods return a `QuerySet<M>` for fluent query building.
+
+```
+Model::objects() -> Manager<M>
+    .all()             -> QuerySet<M>   -> .all().await -> Vec<M>
+    .filter(...)       -> QuerySet<M>   -> .all().await -> Vec<M>
+    .get(pk)           -> QuerySet<M>   -> .all().await -> Vec<M>
+    .create(&model)    -----------------> async Result<M>
+    .update(&model)    -----------------> async Result<M>
+    .delete(pk)        -----------------> async Result<()>
+```
+
+### Basic CRUD
+
+```rust
+// Get all records
+let users = User::objects().all().all().await?;
+
+// Get by primary key
+let user = User::objects().get(42).all().await?;
+
+// Create (INSERT)
+let new_user = User { id: None, name: "Alice".to_string(), .. };
+let created = User::objects().create(&new_user).await?;
+
+// Update
+let updated = User::objects().update(&user).await?;
+
+// Delete by primary key
+User::objects().delete(42).await?;
+
+// Count
+let total = User::objects().count().await?;
+
+// Bulk operations
+let users = User::objects().bulk_create(&[user1, user2, user3]).await?;
+let updated = User::objects().bulk_update(&[user1, user2]).await?;
+
+// Get or create (returns (model, was_created))
+let (user, created) = User::objects().get_or_create(...).await?;
+```
+
+### Filtering
+
+```rust
+use reinhardt_db::orm::query::{FilterOperator, FilterValue};
+
+// Filter with operator and value
+let active_users = User::objects()
+    .filter("is_active", FilterOperator::Eq, FilterValue::Bool(true))
+    .all()
+    .await?;
+
+// Filter with Filter object (Django-style)
+let alice = User::objects()
+    .filter_by(User::field_name().eq("Alice"))
+    .all()
+    .await?;
+
+// Type-safe FieldRef
+let users = User::objects()
+    .filter(User::field_email(), FilterOperator::Eq,
+        FilterValue::String("alice@example.com".to_string()))
+    .all()
+    .await?;
+```
+
+### Ordering, Pagination, Limit/Offset
+
+```rust
+// Order by (ascending)
+let users = User::objects().order_by(&["name"]).all().await?;
+
+// Descending order (prefix with "-")
+let users = User::objects().order_by(&["-created_at"]).all().await?;
+
+// Multiple fields
+let users = User::objects().order_by(&["department", "-salary"]).all().await?;
+
+// Limit
+let users = User::objects().limit(10).all().await?;
+
+// Offset
+let users = User::objects().offset(20).all().await?;
+
+// Pagination (page, page_size)
+let users = User::objects().paginate(3, 10).all().await?;  // page 3, 10 per page
+```
+
+### Field Selection
+
+```rust
+// Load only specified fields (Django's only())
+let users = User::objects().only(&["id", "username"]).all().await?;
+
+// Exclude specified fields from initial load (Django's defer())
+let users = User::objects().defer(&["bio", "profile_picture"]).all().await?;
+
+// Select specific fields (Django's values())
+let data = User::objects().values(&["id", "username", "email"]).all().await?;
+
+// Alias for values() (Django's values_list())
+let data = User::objects().values_list(&["id", "username"]).all().await?;
+```
+
+### Relationship Loading
+
+```rust
+// Eager load with JOIN (Django's select_related)
+let posts = Post::objects()
+    .select_related(&["author", "category"])
+    .all()
+    .await?;
+
+// Prefetch with separate queries (Django's prefetch_related)
+let posts = Post::objects()
+    .prefetch_related(&["comments", "tags"])
+    .all()
+    .await?;
+```
+
+### Annotations and Aggregation
+
+```rust
+use reinhardt_db::orm::annotation::{Annotation, AnnotationValue};
+use reinhardt_db::orm::aggregation::Aggregate;
+
+// Add computed field
+let users = User::objects()
+    .annotate(Annotation::new("total_orders",
+        AnnotationValue::Aggregate(Aggregate::count(Some("orders")))))
+    .all()
+    .await?;
+
+// Scalar subquery annotation
+let users = User::objects()
+    .annotate_subquery("latest_post_title", |builder| {
+        builder
+            .select("title")
+            .from("posts")
+            .where_("user_id = users.id")
+            .order_by("-created_at")
+            .limit(1)
+    })
+    .all()
+    .await?;
+```
+
+### PostgreSQL-Specific Filters
+
+```rust
+// Array overlap (&&)
+let posts = Post::objects()
+    .filter_array_overlap("tags", &["rust", "web"])
+    .all().await?;
+
+// Array contains (@>)
+let posts = Post::objects()
+    .filter_array_contains("tags", &["rust", "web"])
+    .all().await?;
+
+// JSONB contains (@>)
+let users = User::objects()
+    .filter_jsonb_contains("metadata", r#"{"role": "admin"}"#)
+    .all().await?;
+
+// JSONB key exists (?)
+let users = User::objects()
+    .filter_jsonb_key_exists("metadata", "email")
+    .all().await?;
+
+// Range contains (@>)
+let events = Event::objects()
+    .filter_range_contains("date_range", "2024-01-15")
+    .all().await?;
+
+// Full-text search
+let posts = Post::objects()
+    .full_text_search("content", "rust async")
+    .all().await?;
+```
+
+### Subquery Filters
+
+```rust
+// IN subquery
+let users = User::objects()
+    .filter_in_subquery("id", |sq| {
+        sq.select("user_id").from("orders").where_("total > 100")
+    })
+    .all().await?;
+
+// NOT IN subquery
+let users = User::objects()
+    .filter_not_in_subquery("id", |sq| {
+        sq.select("user_id").from("banned_users")
+    })
+    .all().await?;
+
+// EXISTS subquery
+let users = User::objects()
+    .filter_exists(|sq| {
+        sq.from("orders").where_("orders.user_id = users.id")
+    })
+    .all().await?;
+```
+
+### CTE (Common Table Expressions)
+
+```rust
+let users = User::objects()
+    .with_cte(cte)
+    .all().await?;
+```
+
+### Connection-Aware Methods
+
+When you need explicit connection control (e.g., in transactions):
+
+```rust
+let result = User::objects().create_with_conn(&conn, &user).await?;
+let result = User::objects().update_with_conn(&conn, &user).await?;
+User::objects().delete_with_conn(&conn, pk).await?;
+let count = User::objects().count_with_conn(&conn).await?;
+```
+
+### Manager Method Reference
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `all()` | `QuerySet<M>` | All records |
+| `filter(field, op, value)` | `QuerySet<M>` | Filter with operator/value |
+| `filter_by(Filter)` | `QuerySet<M>` | Filter with Filter object |
+| `get(pk)` | `QuerySet<M>` | Get by primary key |
+| `limit(n)` | `QuerySet<M>` | LIMIT clause |
+| `offset(n)` | `QuerySet<M>` | OFFSET clause |
+| `order_by(&[fields])` | `QuerySet<M>` | ORDER BY (prefix "-" for DESC) |
+| `paginate(page, size)` | `QuerySet<M>` | Pagination (LIMIT + OFFSET) |
+| `only(&[fields])` | `QuerySet<M>` | Load only specified fields |
+| `defer(&[fields])` | `QuerySet<M>` | Exclude fields from initial load |
+| `values(&[fields])` | `QuerySet<M>` | Select specific fields |
+| `values_list(&[fields])` | `QuerySet<M>` | Alias for values() |
+| `select_related(&[fields])` | `QuerySet<M>` | Eager load with JOIN |
+| `prefetch_related(&[fields])` | `QuerySet<M>` | Prefetch with separate queries |
+| `annotate(Annotation)` | `QuerySet<M>` | Add computed field |
+| `annotate_subquery(name, fn)` | `QuerySet<M>` | Add scalar subquery |
+| `filter_array_overlap(field, &[])` | `QuerySet<M>` | PostgreSQL array && |
+| `filter_array_contains(field, &[])` | `QuerySet<M>` | PostgreSQL array @> |
+| `filter_jsonb_contains(field, json)` | `QuerySet<M>` | PostgreSQL JSONB @> |
+| `filter_jsonb_key_exists(field, key)` | `QuerySet<M>` | PostgreSQL JSONB ? |
+| `filter_range_contains(field, val)` | `QuerySet<M>` | PostgreSQL range @> |
+| `filter_in_subquery(field, fn)` | `QuerySet<M>` | IN subquery |
+| `filter_not_in_subquery(field, fn)` | `QuerySet<M>` | NOT IN subquery |
+| `filter_exists(fn)` | `QuerySet<M>` | EXISTS subquery |
+| `filter_not_exists(fn)` | `QuerySet<M>` | NOT EXISTS subquery |
+| `full_text_search(field, query)` | `QuerySet<M>` | Full-text search |
+| `with_cte(cte)` | `QuerySet<M>` | Common Table Expression |
+| `create(&model)` | `async Result<M>` | INSERT single record |
+| `update(&model)` | `async Result<M>` | UPDATE single record |
+| `delete(pk)` | `async Result<()>` | DELETE by primary key |
+| `count()` | `async Result<i64>` | COUNT records |
+| `bulk_create(&[models])` | `async Result<Vec<M>>` | Bulk INSERT |
+| `bulk_update(&[models])` | `async Result<Vec<M>>` | Bulk UPDATE |
+| `get_or_create(...)` | `async Result<(M, bool)>` | Get or create |
+
+### QuerySet Execution Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `.all().await` | `Result<Vec<T>>` | Execute and return all records |
+| `.get().await` | `Result<T>` | Execute and return single record |
+| `.count().await` | `Result<usize>` | Execute and return count |
+| `.exists().await` | `Result<bool>` | Execute and return existence check |
+
+---
+
+## Low-Level Query Builder (reinhardt-query)
+
+For schema operations (DDL), migrations, and cases where the ORM abstraction is insufficient, use `reinhardt-query` directly. This is a SeaQuery-based type-safe SQL builder.
+
+**Use for:** Migrations, schema management, raw queries, database-specific operations.
+**Do NOT use for:** Application-level CRUD (use `Model::objects()` instead).
+
+### Schema Operations (DDL)
+
+#### CREATE TABLE
 
 ```rust
 use reinhardt_query::{Query, ColumnDef, Table, ColumnType, ForeignKey, Index};
@@ -52,7 +342,7 @@ let create_stmt = Query::create_table()
 db.execute(create_stmt).await?;
 ```
 
-### ALTER TABLE
+#### ALTER TABLE
 
 ```rust
 // Add a column
@@ -88,7 +378,7 @@ let alter_stmt = Query::alter_table()
 db.execute(alter_stmt).await?;
 ```
 
-### DROP TABLE
+#### DROP TABLE
 
 ```rust
 let drop_stmt = Query::drop_table()
@@ -99,7 +389,7 @@ let drop_stmt = Query::drop_table()
 db.execute(drop_stmt).await?;
 ```
 
-### CREATE INDEX
+#### CREATE INDEX
 
 ```rust
 let index_stmt = Query::index_create()
@@ -112,7 +402,7 @@ let index_stmt = Query::index_create()
 db.execute(index_stmt).await?;
 ```
 
-### FOREIGN KEY
+#### FOREIGN KEY
 
 ```rust
 let create_stmt = Query::create_table()
@@ -140,9 +430,9 @@ let create_stmt = Query::create_table()
     .to_owned();
 ```
 
-## Data Operations (DML)
+### Data Operations (DML)
 
-### INSERT
+#### INSERT
 
 ```rust
 use reinhardt_query::{Query, Expr};
@@ -177,7 +467,7 @@ let insert_stmt = Query::insert()
 let id: i64 = db.query_one(insert_stmt).await?;
 ```
 
-### SELECT with Filter, Order, Limit
+#### SELECT with Filter, Order, Limit
 
 ```rust
 // Basic select
@@ -232,7 +522,7 @@ let select_stmt = Query::select()
     .to_owned();
 ```
 
-### UPDATE
+#### UPDATE
 
 ```rust
 let update_stmt = Query::update()
@@ -245,7 +535,7 @@ let update_stmt = Query::update()
 db.execute(update_stmt).await?;
 ```
 
-### DELETE
+#### DELETE
 
 ```rust
 let delete_stmt = Query::delete()
@@ -256,7 +546,7 @@ let delete_stmt = Query::delete()
 db.execute(delete_stmt).await?;
 ```
 
-## Column Definition Methods
+### Column Definition Methods
 
 Quick reference for `ColumnDef` builder methods:
 
@@ -285,3 +575,14 @@ Quick reference for `ColumnDef` builder methods:
 | `.auto_increment()` | `SERIAL` / `AUTO_INCREMENT` | Auto-incrementing |
 | `.primary_key()` | `PRIMARY KEY` | Primary key constraint |
 | `.unique_key()` | `UNIQUE` | Unique constraint |
+
+### Backend Support
+
+`reinhardt-query` generates backend-specific SQL:
+
+| Backend | Placeholder | Identifier Quoting |
+|---------|-------------|-------------------|
+| PostgreSQL | `$1, $2, ...` | `"identifier"` |
+| MySQL | `?, ?, ...` | `` `identifier` `` |
+| SQLite | `?, ?, ...` | `"identifier"` |
+| CockroachDB | `$1, $2, ...` | `"identifier"` |

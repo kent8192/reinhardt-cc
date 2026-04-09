@@ -5,7 +5,7 @@
 The standard workflow for applying model changes to the database:
 
 ```
-Define/Modify Models → Generate Migration → Review → Apply → Verify
+Define/Modify Models -> Generate Migration -> Review -> Apply -> Verify
 ```
 
 ### Step 1: Define or Modify Models
@@ -17,18 +17,30 @@ Edit your model structs in `src/apps/<name>/models.rs`. See `model-patterns.md` 
 After modifying models, generate a migration file:
 
 ```bash
-reinhardt-admin makemigrations <app_name>
+cargo run --bin manage makemigrations <app_label>
 ```
 
-This compares the current model definitions against the last migration state and produces a new migration file in `migrations/<app_name>/`.
+This compares the current model definitions against the last migration state and produces a new migration file in `migrations/<app_name>/`. The migration name (`--name`) is **automatically generated** from the detected changes (e.g., `add_field_bio_to_user`, `create_model_post`). You only need to specify `--name` when you want a custom name.
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Preview without writing files |
+| `-n, --name <NAME>` | Custom migration name |
+| `--check` | Check if migrations are missing (CI use) |
+| `--empty` | Create empty migration (for hand-written operations) |
+| `--merge` | Fix migration conflicts (create merge migration) |
+| `--force-empty-state` | Force empty state when DB/TestContainers unavailable (dangerous) |
+| `--migration-dir <PATH>` | Migration directory (default: `./migrations`) |
 
 Migration files are named with a sequential number and description:
 ```
 migrations/
-└── polls/
-    ├── 0001_initial.rs
-    ├── 0002_add_choice_votes_default.rs
-    └── 0003_add_question_is_published.rs
++-- polls/
+    +-- 0001_initial.rs
+    +-- 0002_add_choice_votes_default.rs
+    +-- 0003_add_question_is_published.rs
 ```
 
 ### Step 3: Review the Generated Migration
@@ -41,33 +53,50 @@ migrations/
 - Default values are appropriate
 - The migration is reversible (has both `up` and `down` operations)
 
-```bash
-# Preview the SQL that will be executed
-reinhardt-admin sqlmigrate <app_name> <migration_name>
-```
+> **Note:** There is no `sqlmigrate` command. To preview SQL, use `--plan` flag on the `migrate` command or review the generated migration file directly.
 
 ### Step 4: Apply the Migration
 
 ```bash
 # Apply all pending migrations
-reinhardt-admin migrate
+cargo run --bin manage migrate
 
 # Apply migrations for a specific app
-reinhardt-admin migrate <app_name>
+cargo run --bin manage migrate <app_label>
 
 # Apply up to a specific migration
-reinhardt-admin migrate <app_name> <migration_name>
+cargo run --bin manage migrate <app_label> <migration_name>
+
+# Preview migration plan without applying
+cargo run --bin manage migrate --plan
+
+# Mark as applied without running (for existing databases)
+cargo run --bin manage migrate --fake
+
+# Fake only the initial migration
+cargo run --bin manage migrate --fake-initial
 ```
 
 ### Step 5: Verify
 
-```bash
-# Check migration status
-reinhardt-admin showmigrations
+Run tests to verify models work correctly:
 
-# Run tests to verify models work correctly
+```bash
 cargo nextest run --workspace --all-features
 ```
+
+> **Note:** There is no `showmigrations` command. Check migration state by reviewing the `migrations/` directory or inspecting the `reinhardt_migrations` table in the database.
+
+## CLI Summary
+
+Reinhardt has **two CLI tools** with different purposes:
+
+| Tool | Invocation | Commands |
+|------|-----------|----------|
+| **manage** (project-specific) | `cargo run --bin manage <command>` | `makemigrations`, `migrate`, `runserver`, `shell`, `check`, `collectstatic`, etc. |
+| **reinhardt-admin** (global) | `reinhardt-admin <command>` | `startproject`, `startapp`, `plugin`, `fmt`, `fmt-all` |
+
+Migration commands are **only available in the project-specific `manage` binary**, not in `reinhardt-admin`.
 
 ## Rollback Procedure
 
@@ -75,10 +104,10 @@ To revert a migration, migrate to the previous migration number:
 
 ```bash
 # Roll back the last migration for an app
-reinhardt-admin migrate <app_name> <previous_migration_name>
+cargo run --bin manage migrate <app_label> <previous_migration_name>
 
 # Roll back all migrations for an app (use with caution)
-reinhardt-admin migrate <app_name> zero
+cargo run --bin manage migrate <app_label> zero
 ```
 
 **Rules for rollback:**
@@ -87,45 +116,318 @@ reinhardt-admin migrate <app_name> zero
 - After rollback, update or remove the corresponding model changes
 - Run tests after rollback to confirm consistency
 
-## Manual Schema Changes with reinhardt-query
+## Migration File Format
 
-For schema changes that cannot be expressed through model definitions (custom indexes, partial indexes, database-specific features), write manual migrations using `reinhardt-query`:
+Migration files are Rust source files that export a `pub fn migration() -> Migration` function. There are **no `up`/`down` methods** — operations are declarative, and rollback is auto-generated from the `Operation` variants.
+
+### Auto-Generated Example
+
+`makemigrations` generates files like this:
 
 ```rust
-use reinhardt::db::migration::{Migration, MigrationContext};
-use reinhardt_query::{Query, ColumnDef, Expr, Index};
+use reinhardt::db::migrations::FieldType;
+use reinhardt::db::migrations::prelude::*;
 
-pub struct Migration0004;
-
-impl Migration for Migration0004 {
-    fn name(&self) -> &str {
-        "0004_add_partial_index_active_users"
-    }
-
-    async fn up(&self, ctx: &MigrationContext) -> Result<(), MigrationError> {
-        // Create a partial index (PostgreSQL-specific)
-        let stmt = Query::index_create()
-            .name("idx_users_active_email")
-            .table(Users::Table)
-            .col(Users::Email)
-            .and_where(Expr::col(Users::IsActive).eq(true))
-            .to_owned();
-
-        ctx.execute(stmt).await?;
-        Ok(())
-    }
-
-    async fn down(&self, ctx: &MigrationContext) -> Result<(), MigrationError> {
-        let stmt = Query::index_drop()
-            .name("idx_users_active_email")
-            .table(Users::Table)
-            .to_owned();
-
-        ctx.execute(stmt).await?;
-        Ok(())
+pub fn migration() -> Migration {
+    Migration {
+        app_label: "auth".to_string(),
+        name: "0001_initial".to_string(),
+        operations: vec![Operation::CreateTable {
+            name: "auth_users".to_string(),
+            columns: vec![
+                ColumnDefinition {
+                    name: "id".to_string(),
+                    type_definition: FieldType::Uuid,
+                    not_null: true,
+                    unique: false,
+                    primary_key: true,
+                    auto_increment: false,
+                    default: None,
+                },
+                ColumnDefinition {
+                    name: "username".to_string(),
+                    type_definition: FieldType::VarChar(150),
+                    not_null: true,
+                    unique: true,
+                    primary_key: false,
+                    auto_increment: false,
+                    default: None,
+                },
+                // ... more columns
+            ],
+            constraints: vec![Constraint::Unique {
+                name: "auth_user_username_uniq".to_string(),
+                columns: vec!["username".to_string()],
+            }],
+            without_rowid: None,
+            interleave_in_parent: None,
+            partition: None,
+        }],
+        dependencies: vec![],
+        atomic: true,
+        replaces: vec![],
+        initial: Some(true),
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
     }
 }
 ```
+
+### Migration Struct Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `app_label` | `String` | App this migration belongs to |
+| `name` | `String` | Migration name (e.g., `"0001_initial"`) |
+| `operations` | `Vec<Operation>` | Declarative operations to apply |
+| `dependencies` | `Vec<(String, String)>` | `(app_label, migration_name)` pairs that must run first |
+| `atomic` | `bool` | Wrap in a transaction |
+| `initial` | `Option<bool>` | `Some(true)` for initial migration, `None` to auto-infer |
+| `replaces` | `Vec<(String, String)>` | Squashed migration support |
+| `state_only` | `bool` | Update ProjectState without executing DB operations |
+| `database_only` | `bool` | Execute DB operations without updating ProjectState |
+
+### Migration Name Auto-Detection
+
+The `--name` flag is optional. `makemigrations` automatically generates descriptive names from the operations:
+
+| Operations | Generated Name |
+|-----------|----------------|
+| Single `CreateTable` with no deps | `initial` |
+| `AddColumn { column: "bio", table: "users" }` | `add_bio_to_users` |
+| `AddConstraint` on email | `add_email_unique` |
+| Multiple operations | `{frag1}_{frag2}` (max 52 chars, truncated with `_and_more`) |
+| No fragments extractable | `auto_{timestamp}` |
+
+### Operation Variants
+
+| Operation | Description |
+|-----------|-------------|
+| `CreateTable { name, columns, constraints, ... }` | Create a new table |
+| `DropTable { name }` | Drop a table |
+| `AddColumn { table, column, ... }` | Add a column to existing table |
+| `DropColumn { table, column }` | Drop a column |
+| `AlterColumn { table, column, old_definition, new_definition }` | Modify a column |
+| `RenameTable { old_name, new_name }` | Rename a table |
+| `RenameColumn { table, old_name, new_name }` | Rename a column |
+| `AddConstraint { table, constraint_sql }` | Add a constraint (raw SQL) |
+| `DropConstraint { table, constraint_name }` | Drop a constraint |
+| `CreateIndex { table, columns, unique, index_type, where_clause, ... }` | Create an index |
+| `DropIndex { table, columns }` | Drop an index |
+| `RunSQL { sql, reverse_sql }` | Execute raw SQL |
+| `RunRust { code, reverse_code }` | Execute Rust code |
+| `AlterUniqueTogether { table, unique_together }` | Alter unique together constraints |
+| `AlterModelOptions { table, options }` | Alter model-level options |
+
+## Hand-Written Migration Files
+
+For schema changes that cannot be expressed through model definitions (custom indexes, partial indexes, data migrations), write a migration file manually.
+
+### Step 1: Generate an Empty Migration
+
+```bash
+cargo run --bin manage makemigrations <app_label> --empty --name "add_partial_index_active_users"
+```
+
+### Step 2: Fill in the Operations
+
+Edit the generated file to add your custom operations:
+
+```rust
+use reinhardt::db::migrations::prelude::*;
+use reinhardt::db::migrations::operations::IndexType;
+
+pub fn migration() -> Migration {
+    Migration {
+        app_label: "myapp".to_string(),
+        name: "0004_add_partial_index_active_users".to_string(),
+        operations: vec![Operation::CreateIndex {
+            table: "users".to_string(),
+            columns: vec!["email".to_string()],
+            unique: false,
+            index_type: Some(IndexType::BTree),
+            where_clause: Some("is_active = true".to_string()),
+            concurrently: true,
+            expressions: None,
+            mysql_options: None,
+            operator_class: None,
+        }],
+        dependencies: vec![
+            ("myapp".to_string(), "0003_previous_migration".to_string()),
+        ],
+        atomic: true,
+        replaces: vec![],
+        initial: Some(false),
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+```
+
+### Data Migration Example (RunSQL)
+
+```rust
+pub fn migration() -> Migration {
+    Migration {
+        app_label: "myapp".to_string(),
+        name: "0005_backfill_display_names".to_string(),
+        operations: vec![Operation::RunSQL {
+            sql: "UPDATE users SET display_name = username WHERE display_name IS NULL".to_string(),
+            reverse_sql: Some("UPDATE users SET display_name = NULL WHERE display_name = username".to_string()),
+        }],
+        dependencies: vec![
+            ("myapp".to_string(), "0004_add_partial_index_active_users".to_string()),
+        ],
+        atomic: true,
+        replaces: vec![],
+        initial: Some(false),
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+```
+
+### Cross-App Dependencies Example
+
+```rust
+// deployments/0003_add_cluster_id_fk.rs
+pub fn migration() -> Migration {
+    Migration {
+        app_label: "deployments".to_string(),
+        name: "0003_add_cluster_id_fk".to_string(),
+        operations: vec![Operation::AddConstraint {
+            table: "deployments".to_string(),
+            constraint_sql: "CONSTRAINT deployments_cluster_id_fk FOREIGN KEY (cluster_id) \
+                REFERENCES clusters(id) ON DELETE RESTRICT ON UPDATE CASCADE".to_string(),
+        }],
+        dependencies: vec![
+            ("deployments".to_string(), "0002_add_user_id".to_string()),
+            ("clusters".to_string(), "0001_initial".to_string()),
+        ],
+        atomic: true,
+        replaces: vec![],
+        initial: Some(false),
+        state_only: false,
+        database_only: false,
+        swappable_dependencies: vec![],
+        optional_dependencies: vec![],
+    }
+}
+```
+
+### When to Use Hand-Written Migrations
+
+| Scenario | Approach |
+|----------|----------|
+| Add/remove/modify columns | Auto-generated (`makemigrations`) |
+| Add/remove relations | Auto-generated (`makemigrations`) |
+| Partial indexes (PostgreSQL) | Hand-written (`CreateIndex` with `where_clause`) |
+| Concurrent index creation | Hand-written (`CreateIndex` with `concurrently: true`) |
+| Expression indexes | Hand-written (`CreateIndex` with `expressions`) |
+| GIN/GiST indexes | Hand-written (`CreateIndex` with `index_type`) |
+| Data migrations (backfill, transform) | Hand-written (`RunSQL` / `RunRust`) |
+| Custom constraints or triggers | Hand-written (`AddConstraint` / `RunSQL`) |
+| Cross-app foreign keys | Hand-written (with `dependencies`) |
+
+## Test with TestContainers
+
+Use `reinhardt-testkit` to run migrations against a real database in tests.
+
+### Recommended: `postgres_with_migrations_from_dir()`
+
+The recommended pattern loads migration files from a directory and applies them to a fresh PostgreSQL container:
+
+```rust
+use reinhardt_testkit::fixtures::testcontainers::postgres_with_migrations_from_dir;
+use rstest::*;
+use std::sync::Arc;
+use testcontainers::ContainerAsync;
+use testcontainers::GenericImage;
+use reinhardt_db::DatabaseConnection;
+
+#[fixture]
+async fn test_app() -> (ContainerAsync<GenericImage>, Arc<DatabaseConnection>) {
+    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations");
+
+    postgres_with_migrations_from_dir(&migrations_dir)
+        .await
+        .expect("Failed to start PostgreSQL with migrations")
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+#[serial(database)]
+async fn test_user_creation(
+    #[future] test_app: (ContainerAsync<GenericImage>, Arc<DatabaseConnection>),
+) {
+    // Arrange
+    let (_container, _conn) = test_app.await;
+
+    // Act
+    let user = User { id: None, name: "Alice".to_string() };
+    let created = User::objects().create(&user).await.unwrap();
+
+    // Assert
+    assert!(created.id.is_some());
+}
+```
+
+### Under the Hood
+
+`postgres_with_migrations_from_dir()` performs these steps:
+1. Starts a PostgreSQL container via TestContainers
+2. Connects via `DatabaseConnection::connect_postgres()`
+3. Loads migrations using `FilesystemSource`
+4. Applies them via `DatabaseMigrationExecutor::apply_migrations()`
+5. Initializes ORM global state via `reinitialize_database()`
+
+### Alternative: Type-Safe Migration Provider
+
+For compile-time migration management, use the generic variant:
+
+```rust
+use reinhardt_testkit::fixtures::testcontainers::postgres_with_migrations_from;
+
+let (container, conn) = postgres_with_migrations_from::<MyAppMigrations>()
+    .await
+    .expect("Failed to apply migrations");
+```
+
+### E2E Test Pattern (with Test Server)
+
+For full end-to-end tests including HTTP layer (pattern from reinhardt-cloud):
+
+```rust
+#[fixture]
+async fn test_app() -> (
+    ContainerAsync<GenericImage>,
+    Arc<DatabaseConnection>,
+    TestServerGuard,
+    APIClient,
+) {
+    let migrations_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations");
+
+    let (container, conn) = postgres_with_migrations_from_dir(&migrations_dir)
+        .await
+        .expect("Failed to start PostgreSQL with migrations");
+
+    let router = routes().into_server();
+    let server = test_server_guard(router).await;
+    let client = api_client_from_url(&server.url);
+
+    (container, conn, server, client)
+}
+```
+
+**Important:** Always hold the `ContainerAsync` reference in your test — dropping it stops the container.
 
 ## Best Practices
 
@@ -133,24 +435,19 @@ impl Migration for Migration0004 {
 
 2. **Always review before applying** — Auto-generated migrations may include unintended changes, especially after renaming fields or restructuring models.
 
-3. **Test with TestContainers** — Run migration tests against a real database using TestContainers to catch driver-specific issues:
-   ```rust
-   #[rstest]
-   async fn test_migration_applies_cleanly(db: DatabaseConnection) {
-       // Arrange: provided by TestContainers fixture
+3. **Never edit applied migrations** — Once a migration has been applied to any environment (including other developers' machines), create a new migration instead of modifying the existing one.
 
-       // Act
-       let result = run_migrations(&db).await;
+4. **Always use reinhardt-query in hand-written migrations** — Never write raw SQL strings. Use `reinhardt_query::Query` builders for all DDL and DML operations. This ensures database portability and type safety.
 
-       // Assert
-       assert!(result.is_ok());
-   }
-   ```
+5. **Include both `up` and `down`** — Every migration should be reversible. If a `down` operation is truly impossible (e.g., dropping a column with data), document this clearly in the migration and return an error from `down`.
 
-4. **Never edit applied migrations** — Once a migration has been applied to any environment (including other developers' machines), create a new migration instead of modifying the existing one.
+6. **Coordinate migrations in teams** — When multiple developers create migrations for the same app simultaneously, merge conflicts in migration numbering should be resolved by renumbering and re-testing. Use `--merge` flag for automatic conflict resolution.
 
-5. **Always use reinhardt-query** — Never write raw SQL strings in migrations. Use `reinhardt_query::Query` builders for all DDL and DML operations. This ensures database portability and type safety.
+7. **Use `--check` in CI** — Run `cargo run --bin manage makemigrations --check` in CI to detect missing migrations.
 
-6. **Include both `up` and `down`** — Every migration should be reversible. If a `down` operation is truly impossible (e.g., dropping a column with data), document this clearly in the migration and return an error from `down`.
+## Dynamic References
 
-7. **Coordinate migrations in teams** — When multiple developers create migrations for the same app simultaneously, merge conflicts in migration numbering should be resolved by renumbering and re-testing.
+For the latest migration API:
+1. Read `reinhardt/crates/reinhardt-commands/src/cli.rs` for CLI command definitions
+2. Read `reinhardt/crates/reinhardt-db/src/migrations/` for migration executor internals
+3. Read `reinhardt/crates/reinhardt-testkit/src/fixtures/testcontainers.rs` for test fixture API
