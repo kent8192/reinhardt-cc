@@ -14,7 +14,6 @@ pub struct AppConfig {
 // AppConfig is auto-injectable because it implements Default + Clone + Send + Sync + 'static.
 // No registration needed.
 
-#[get("/config")]
 #[inject]
 pub async fn show_config(
     request: Request,
@@ -66,7 +65,6 @@ Apply `#[inject]` to view functions to receive dependencies as parameters.
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[get("/users")]
 #[inject]
 pub async fn list_users(
     request: Request,
@@ -76,7 +74,6 @@ pub async fn list_users(
     Response::json(users)
 }
 
-#[post("/users")]
 #[inject]
 pub async fn create_user(
     request: Request,
@@ -95,7 +92,6 @@ pub async fn create_user(
 Handlers can receive multiple injected dependencies. Each is resolved independently.
 
 ```rust
-#[get("/dashboard")]
 #[inject]
 pub async fn dashboard(
     request: Request,
@@ -172,7 +168,6 @@ let service = Arc::new(UserService::new(pool.clone()));
 app.inject_singleton::<Arc<UserService>>(service);
 
 // Injection in handler
-#[get("/users")]
 #[inject]
 pub async fn list_users(
     request: Request,

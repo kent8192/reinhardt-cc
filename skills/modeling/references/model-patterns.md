@@ -122,7 +122,7 @@ pub struct Article {
     pub title: String,
 
     #[rel(many_to_many, to = "Tag", related_name = "articles")]
-    pub tags: ManyToManyField<Tag>,
+    pub tags: ManyToManyField<Article, Tag>,
 }
 
 #[model(table_name = "tags")]

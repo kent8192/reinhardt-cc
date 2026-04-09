@@ -12,11 +12,11 @@ use super::views;
 pub fn router() -> ServerRouter {
     let mut router = ServerRouter::new();
 
-    router.route("/", views::list_users);
-    router.route("/{id}", views::get_user);
-    router.route("/", views::create_user);
-    router.route("/{id}", views::update_user);
-    router.route("/{id}", views::delete_user);
+    router.endpoint("/", views::list_users);
+    router.endpoint("/{id}", views::get_user);
+    router.endpoint("/", views::create_user);
+    router.endpoint("/{id}", views::update_user);
+    router.endpoint("/{id}", views::delete_user);
 
     router
 }
@@ -65,40 +65,44 @@ pub fn root_router() -> UnifiedRouter {
 }
 ```
 
-## URL Patterns in View Decorators
+## URL Path Parameters
 
-URL patterns support path parameters with type annotations:
+URL patterns support path parameters using `{param}` syntax. Parameters are extracted from the request inside the handler function:
 
 ```rust
 // Simple path parameter
-#[get("/users/{id}")]
-pub async fn get_user(request: Request, id: Path<i64>) -> Response { ... }
+pub async fn get_user(request: Request) -> Response {
+    let id: i64 = request.path_param("id")?;
+    // ...
+}
 
 // Multiple path parameters
-#[get("/users/{user_id}/posts/{post_id}")]
-pub async fn get_user_post(
-    request: Request,
-    user_id: Path<i64>,
-    post_id: Path<i64>,
-) -> Response { ... }
+pub async fn get_user_post(request: Request) -> Response {
+    let user_id: i64 = request.path_param("user_id")?;
+    let post_id: i64 = request.path_param("post_id")?;
+    // ...
+}
 
 // String path parameter
-#[get("/users/{username}")]
-pub async fn get_by_username(request: Request, username: Path<String>) -> Response { ... }
-
-// UUID path parameter
-#[get("/resources/{uuid}")]
-pub async fn get_resource(request: Request, uuid: Path<Uuid>) -> Response { ... }
+pub async fn get_by_username(request: Request) -> Response {
+    let username: String = request.path_param("username")?;
+    // ...
+}
 ```
 
-### Path Parameter Types
+> **Note**: Verify `request.path_param()` signature against latest reinhardt source.
 
-| Type | Pattern Match | Example |
-|------|---------------|---------|
-| `Path<i64>` | Integer | `/users/42` |
-| `Path<i32>` | Integer | `/items/7` |
-| `Path<String>` | Any string segment | `/users/alice` |
-| `Path<Uuid>` | UUID format | `/resources/550e8400-e29b-41d4-a716-446655440000` |
+### Route Registration with Path Parameters
+
+```rust
+pub fn router() -> ServerRouter {
+    let mut router = ServerRouter::new();
+    router.endpoint("/{id}", views::get_user);
+    router.endpoint("/{user_id}/posts/{post_id}", views::get_user_post);
+    router.endpoint("/{username}", views::get_by_username);
+    router
+}
+```
 
 ## Mounting and Nesting
 
@@ -142,22 +146,22 @@ pub fn router() -> ServerRouter {
     let mut router = ServerRouter::new();
 
     // Public routes (no auth required)
-    router.route("/health", views::health_check);
-    router.route("/login", views::login);
+    router.endpoint("/health", views::health_check);
+    router.endpoint("/login", views::login);
 
     // Protected group with authentication middleware
     let mut protected = ServerRouter::new();
     protected.middleware(AuthenticationMiddleware::new());
-    protected.route("/profile", views::get_profile);
-    protected.route("/settings", views::update_settings);
+    protected.endpoint("/profile", views::get_profile);
+    protected.endpoint("/settings", views::update_settings);
     router.include("/", protected);
 
     // Admin group with additional authorization
     let mut admin = ServerRouter::new();
     admin.middleware(AuthenticationMiddleware::new());
     admin.middleware(RequirePermission::new("is_staff"));
-    admin.route("/dashboard", views::admin_dashboard);
-    admin.route("/users", views::admin_list_users);
+    admin.endpoint("/dashboard", views::admin_dashboard);
+    admin.endpoint("/users", views::admin_list_users);
     router.include("/admin", admin);
 
     router

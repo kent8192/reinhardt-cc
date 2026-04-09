@@ -9,15 +9,14 @@ use reinhardt::db::prelude::*;
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[get("/users/{id}")]
 #[inject]
 pub async fn get_user(
     request: Request,
-    id: Path<i64>,
     db: Inject<DatabaseConnection>,
 ) -> Response {
+    let id: i64 = request.path_param("id")?;
     let user = User::objects()
-        .filter(User::id.eq(*id))
+        .filter(User::id.eq(id))
         .get(&*db)
         .await
         .map_err(|_| HttpError::not_found("User not found"))?;
@@ -29,7 +28,6 @@ pub async fn get_user(
 ### Transaction Support
 
 ```rust
-#[post("/transfer")]
 #[inject]
 pub async fn transfer_funds(
     request: Request,
@@ -67,7 +65,6 @@ use reinhardt::auth::prelude::*;
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[get("/profile")]
 #[inject]
 pub async fn get_profile(
     request: Request,
@@ -82,11 +79,9 @@ pub async fn get_profile(
 ### Checking Permissions
 
 ```rust
-#[delete("/users/{id}")]
 #[inject]
 pub async fn delete_user(
     request: Request,
-    id: Path<i64>,
     auth: AuthUser<User>,
 ) -> Response {
     // Check if the authenticated user has admin permissions
@@ -94,7 +89,8 @@ pub async fn delete_user(
         return Err(HttpError::forbidden("Admin access required"));
     }
 
-    let user = User::objects().get(*id).await?;
+    let id: i64 = request.path_param("id")?;
+    let user = User::objects().get(id).await?;
     user.delete().await?;
     Response::no_content()
 }
@@ -105,7 +101,6 @@ pub async fn delete_user(
 Use `Option<AuthUser<T>>` for endpoints that work for both authenticated and anonymous users:
 
 ```rust
-#[get("/posts")]
 #[inject]
 pub async fn list_posts(
     request: Request,
@@ -123,22 +118,19 @@ pub async fn list_posts(
 }
 ```
 
-## SessionData and SessionStoreRef Injection
+## Session Injection
 
-### SessionData
-
-`SessionData` provides access to the current request's session key-value store.
+`Session` provides access to the current request's session key-value store.
 
 ```rust
 use reinhardt::auth::prelude::*;
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[get("/cart")]
 #[inject]
 pub async fn get_cart(
     request: Request,
-    session: Inject<SessionData>,
+    session: Inject<Session>,
 ) -> Response {
     let cart: Option<Cart> = session.get("cart").await?;
     match cart {
@@ -147,11 +139,10 @@ pub async fn get_cart(
     }
 }
 
-#[post("/cart/add")]
 #[inject]
 pub async fn add_to_cart(
     request: Request,
-    session: Inject<SessionData>,
+    session: Inject<Session>,
 ) -> Response {
     let item: CartItem = request.json().await?;
 
@@ -167,42 +158,18 @@ pub async fn add_to_cart(
 }
 ```
 
-### SessionStoreRef
-
-`SessionStoreRef` provides direct access to the session store backend for administrative operations.
-
-```rust
-#[post("/admin/sessions/clear")]
-#[inject]
-pub async fn clear_user_sessions(
-    request: Request,
-    auth: AuthUser<User>,
-    store: Inject<SessionStoreRef>,
-) -> Response {
-    if !auth.user().is_staff {
-        return Err(HttpError::forbidden("Admin access required"));
-    }
-
-    let data: ClearRequest = request.json().await?;
-    store.delete_sessions_for_user(data.user_id).await?;
-
-    Response::json(json!({ "status": "cleared" }))
-}
-```
-
 ## Combining Multiple Injections
 
 Handlers can receive any combination of injectable types:
 
 ```rust
-#[post("/orders")]
 #[inject]
 pub async fn create_order(
     request: Request,
     auth: AuthUser<User>,
     db: Inject<DatabaseConnection>,
     email_service: Inject<Arc<EmailService>>,
-    session: Inject<SessionData>,
+    session: Inject<Session>,
 ) -> Response {
     let cart: Cart = session
         .get("cart")
@@ -288,7 +255,6 @@ impl UserRepository {
 ### Using the Repository in Handlers
 
 ```rust
-#[get("/users")]
 #[inject]
 pub async fn list_users(
     request: Request,
@@ -298,13 +264,12 @@ pub async fn list_users(
     Response::json(UserSerializer::build_many(&users).serialize())
 }
 
-#[get("/users/by-email/{email}")]
 #[inject]
 pub async fn find_by_email(
     request: Request,
-    email: Path<String>,
     user_repo: Inject<UserRepository>,
 ) -> Response {
+    let email: String = request.path_param("email")?;
     let user = user_repo
         .find_by_email(&email)
         .await?

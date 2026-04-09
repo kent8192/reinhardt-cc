@@ -47,7 +47,6 @@ use reinhardt::auth::prelude::*;
 use reinhardt::views::prelude::*;
 
 /// Login endpoint: validates credentials and returns JWT tokens
-#[post("/auth/login")]
 pub async fn login(request: Request) -> Response {
     let data = request.json().await?;
     let username = data["username"].as_str().unwrap_or_default();
@@ -64,7 +63,6 @@ pub async fn login(request: Request) -> Response {
 }
 
 /// Token refresh endpoint
-#[post("/auth/refresh")]
 pub async fn refresh_token(request: Request) -> Response {
     let data = request.json().await?;
     let refresh = data["refresh"].as_str().unwrap_or_default();
@@ -76,7 +74,6 @@ pub async fn refresh_token(request: Request) -> Response {
 }
 
 /// Protected endpoint: requires valid JWT
-#[get("/me")]
 #[inject]
 pub async fn get_profile(request: Request, auth: AuthUser) -> Response {
     let user = auth.user();
@@ -126,7 +123,6 @@ pub fn session_config() -> SessionConfig {
 use reinhardt::auth::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[post("/auth/login")]
 pub async fn session_login(request: Request) -> Response {
     let data = request.json().await?;
     let username = data["username"].as_str().unwrap_or_default();
@@ -141,7 +137,6 @@ pub async fn session_login(request: Request) -> Response {
     Response::json(serde_json::json!({ "status": "ok" }))
 }
 
-#[post("/auth/logout")]
 pub async fn session_logout(request: Request) -> Response {
     logout(&request).await?;
     Response::json(serde_json::json!({ "status": "ok" }))
@@ -192,7 +187,6 @@ impl ViewSet for UserViewSet {
 }
 
 // On a function-based view (via middleware)
-#[get("/admin/dashboard")]
 #[permission(IsAdminUser)]
 pub async fn admin_dashboard(request: Request, auth: AuthUser) -> Response {
     // Only staff users reach here

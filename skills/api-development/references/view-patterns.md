@@ -2,16 +2,16 @@
 
 ## Function-Based Views
 
-Use decorator attributes to define HTTP method handlers. Each function receives a `Request` and returns a `Response`.
+Handler functions receive a `Request` and return a `Response` directly. Routes are registered on a `ServerRouter` using `.endpoint()`.
 
 ```rust
 use reinhardt::views::prelude::*;
 use reinhardt::rest::prelude::*;
 
-#[get("/users/{id}")]
-pub async fn get_user(request: Request, id: Path<i64>) -> Response {
+pub async fn get_user(request: Request) -> Response {
+    let id: i64 = request.path_param("id")?;
     let user = User::objects()
-        .get(*id)
+        .get(id)
         .await
         .map_err(|_| HttpError::not_found("User not found"))?;
 
@@ -19,7 +19,6 @@ pub async fn get_user(request: Request, id: Path<i64>) -> Response {
     Response::json(serializer.serialize())
 }
 
-#[post("/users")]
 pub async fn create_user(request: Request) -> Response {
     let data = request.json().await?;
     let serializer = UserCreateSerializer::deserialize(&data)?;
@@ -30,9 +29,9 @@ pub async fn create_user(request: Request) -> Response {
     Response::json(output.serialize()).status(StatusCode::CREATED)
 }
 
-#[put("/users/{id}")]
-pub async fn update_user(request: Request, id: Path<i64>) -> Response {
-    let user = User::objects().get(*id).await?;
+pub async fn update_user(request: Request) -> Response {
+    let id: i64 = request.path_param("id")?;
+    let user = User::objects().get(id).await?;
     let data = request.json().await?;
     let serializer = UserSerializer::deserialize_with(&data, &user)?;
     serializer.validate()?;
@@ -42,23 +41,37 @@ pub async fn update_user(request: Request, id: Path<i64>) -> Response {
     Response::json(output.serialize())
 }
 
-#[delete("/users/{id}")]
-pub async fn delete_user(request: Request, id: Path<i64>) -> Response {
-    let user = User::objects().get(*id).await?;
+pub async fn delete_user(request: Request) -> Response {
+    let id: i64 = request.path_param("id")?;
+    let user = User::objects().get(id).await?;
     user.delete().await?;
     Response::no_content()
 }
 ```
 
-### Available HTTP Method Decorators
+### Route Registration
 
-| Decorator | HTTP Method | Typical Use |
-|-----------|-------------|-------------|
-| `#[get("...")]` | GET | Retrieve resource(s) |
-| `#[post("...")]` | POST | Create a resource |
-| `#[put("...")]` | PUT | Full update of a resource |
-| `#[patch("...")]` | PATCH | Partial update of a resource |
-| `#[delete("...")]` | DELETE | Delete a resource |
+Routes are registered on `ServerRouter` using `.endpoint()`, not via decorator macros:
+
+```rust
+// src/apps/user/urls.rs
+use reinhardt::urls::prelude::*;
+use super::views;
+
+pub fn router() -> ServerRouter {
+    let mut router = ServerRouter::new();
+
+    router.endpoint("/", views::list_users);       // GET
+    router.endpoint("/{id}", views::get_user);     // GET
+    router.endpoint("/", views::create_user);       // POST
+    router.endpoint("/{id}", views::update_user);  // PUT
+    router.endpoint("/{id}", views::delete_user);  // DELETE
+
+    router
+}
+```
+
+> **Note**: Verify route registration details against latest reinhardt source, as the `.endpoint()` API may accept additional method/configuration parameters.
 
 ## Views with Dependency Injection
 
@@ -68,7 +81,6 @@ Use `#[inject]` to receive services from the DI container:
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[get("/users")]
 #[inject]
 pub async fn list_users(
     request: Request,
@@ -88,7 +100,6 @@ pub async fn list_users(
 | `Inject<Arc<T>>` | Shared service from the DI container |
 | `AuthUser` | Authenticated user (extracted from request) |
 | `DatabaseConnection` | Database connection from the pool |
-| `Path<T>` | URL path parameters |
 | `QueryParams<T>` | URL query string parameters |
 
 ## Generic Views
