@@ -1,95 +1,168 @@
 # Reinhardt View Patterns Reference
 
-## Function-Based Views
+## Function-Based Views with Decorators
 
-Handler functions receive a `Request` and return a `Response` directly. Routes are registered on a `ServerRouter` using `.endpoint()`.
+Handler functions use HTTP method decorators (`#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`) to declare their route and method. Handlers are async and return `ViewResult<Response>`.
 
 ```rust
 use reinhardt::views::prelude::*;
-use reinhardt::rest::prelude::*;
+use reinhardt::core::exception::Error as AppError;
+use reinhardt::core::serde::json;
 
-pub async fn get_user(request: Request) -> Response {
-    let id: i64 = request.path_param("id")?;
+#[get("/users/{id}/", name = "user_retrieve")]
+pub async fn get_user(Path(id): Path<i64>) -> ViewResult<Response> {
     let user = User::objects()
         .get(id)
         .await
-        .map_err(|_| HttpError::not_found("User not found"))?;
+        .map_err(|_| AppError::NotFound("User not found".into()))?;
 
-    let serializer = UserSerializer::build(&user);
-    Response::json(serializer.serialize())
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(user))?))
 }
 
-pub async fn create_user(request: Request) -> Response {
-    let data = request.json().await?;
-    let serializer = UserCreateSerializer::deserialize(&data)?;
-    serializer.validate()?;
+#[post("/users/", name = "user_create")]
+pub async fn create_user(Json(body): Json<CreateUserRequest>) -> ViewResult<Response> {
+    body.validate()?;
+    let user = User::objects().create_from(&body).await?;
 
-    let user = serializer.save().await?;
-    let output = UserSerializer::build(&user);
-    Response::json(output.serialize()).status(StatusCode::CREATED)
+    Ok(Response::new(StatusCode::CREATED)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(user))?))
 }
 
-pub async fn update_user(request: Request) -> Response {
-    let id: i64 = request.path_param("id")?;
+#[patch("/users/{id}/", name = "user_update")]
+pub async fn update_user(
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateUserRequest>,
+) -> ViewResult<Response> {
+    body.validate()?;
     let user = User::objects().get(id).await?;
-    let data = request.json().await?;
-    let serializer = UserSerializer::deserialize_with(&data, &user)?;
-    serializer.validate()?;
+    let updated = user.update_from(&body).await?;
 
-    let updated = serializer.save().await?;
-    let output = UserSerializer::build(&updated);
-    Response::json(output.serialize())
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(updated))?))
 }
 
-pub async fn delete_user(request: Request) -> Response {
-    let id: i64 = request.path_param("id")?;
+#[put("/users/{id}/", name = "user_replace")]
+pub async fn replace_user(
+    Path(id): Path<i64>,
+    Json(body): Json<CreateUserRequest>,
+) -> ViewResult<Response> {
+    body.validate()?;
+    let user = User::objects().get(id).await?;
+    let replaced = user.replace_from(&body).await?;
+
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(replaced))?))
+}
+
+#[delete("/users/{id}/", name = "user_delete")]
+pub async fn delete_user(Path(id): Path<i64>) -> ViewResult<Response> {
     let user = User::objects().get(id).await?;
     user.delete().await?;
-    Response::no_content()
+    Ok(Response::new(StatusCode::NO_CONTENT))
 }
 ```
 
-### Route Registration
+### Decorator Options
 
-Routes are registered on `ServerRouter` using `.endpoint()`, not via decorator macros:
+| Option | Description | Example |
+|--------|-------------|---------|
+| `name = "..."` | Named route for reverse URL lookup | `#[get("/users/", name = "user_list")]` |
+| `pre_validate = true` | Run validation before handler body | `#[post("/users/", name = "user_create", pre_validate = true)]` |
+
+### Return Type
+
+All handlers return `ViewResult<Response>`. This is an alias for `Result<Response, AppError>` where errors are automatically converted to HTTP error responses.
+
+### Extractors
+
+Extractors pull typed data from the incoming request:
+
+| Extractor | Description | Example |
+|-----------|-------------|---------|
+| `Path(id): Path<i64>` | URL path parameter | `#[get("/users/{id}/")]` |
+| `Json(body): Json<T>` | JSON request body (requires `T: Deserialize`) | `#[post("/users/")]` |
+| `Query(params): Query<T>` | Query string parameters (requires `T: Deserialize`) | `?page=1&per_page=20` |
+| `#[inject] AuthInfo(state): AuthInfo` | Lightweight auth state (JWT-based) | `state.user_id()` |
+| `#[inject] AuthUser(user): AuthUser<User>` | Full user model resolution | `user.username` |
 
 ```rust
-// src/apps/user/urls.rs
-use reinhardt::urls::prelude::*;
-use super::views;
+#[get("/users/", name = "user_list")]
+pub async fn list_users(Query(params): Query<PaginationParams>) -> ViewResult<Response> {
+    let users = User::objects()
+        .paginate(params.page, params.per_page)
+        .await?;
 
-pub fn router() -> ServerRouter {
-    let mut router = ServerRouter::new();
-
-    router.endpoint("/", views::list_users);       // GET
-    router.endpoint("/{id}", views::get_user);     // GET
-    router.endpoint("/", views::create_user);       // POST
-    router.endpoint("/{id}", views::update_user);  // PUT
-    router.endpoint("/{id}", views::delete_user);  // DELETE
-
-    router
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&users)?))
 }
 ```
 
-> **Note**: Verify route registration details against latest reinhardt source, as the `.endpoint()` API may accept additional method/configuration parameters.
+### Request/Response Serialization
+
+Request types use `Deserialize`, `Validate`, and `Schema`:
+```rust
+#[derive(Debug, Clone, Deserialize, Validate, Schema)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub email: String,
+}
+```
+
+Response types use `Serialize` and `Schema`:
+```rust
+#[derive(Debug, Serialize, Schema)]
+pub struct UserResponse {
+    pub id: i64,
+    pub username: String,
+    pub email: String,
+}
+```
+
+JSON serialization uses the reinhardt-provided module:
+```rust
+use reinhardt::core::serde::json;
+let bytes = json::to_vec(&response_data)?;
+```
 
 ## Views with Dependency Injection
 
-Use `#[inject]` to receive services from the DI container:
+Use `#[inject]` to receive services and auth context from the DI container:
 
 ```rust
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[inject]
-pub async fn list_users(
-    request: Request,
-    user_service: Inject<Arc<UserService>>,
-    auth: AuthUser,
-) -> Response {
-    let users = user_service.list_active().await?;
-    let serializer = UserSerializer::build_many(&users);
-    Response::json(serializer.serialize())
+#[get("/profile/", name = "user_profile")]
+pub async fn get_profile(
+    #[inject] AuthInfo(state): AuthInfo,
+) -> ViewResult<Response> {
+    let user_id = state.user_id();
+    let user = User::objects().get(user_id).await?;
+
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&ProfileResponse::from(user))?))
+}
+
+#[get("/admin/users/", name = "admin_user_list")]
+pub async fn admin_list_users(
+    #[inject] reinhardt::AuthUser(user): reinhardt::AuthUser<User>,
+    Query(params): Query<PaginationParams>,
+) -> ViewResult<Response> {
+    if !user.is_staff {
+        return Err(AppError::Authentication("Admin access required".into()));
+    }
+    let users = User::objects().all().await?;
+
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&users)?))
 }
 ```
 
@@ -97,10 +170,10 @@ pub async fn list_users(
 
 | Type | Description |
 |------|-------------|
+| `AuthInfo` | Lightweight JWT auth state with `state.user_id()` |
+| `AuthUser<T>` | Full user model resolution from auth token |
 | `Inject<Arc<T>>` | Shared service from the DI container |
-| `AuthUser` | Authenticated user (extracted from request) |
-| `DatabaseConnection` | Database connection from the pool |
-| `QueryParams<T>` | URL query string parameters |
+| `Inject<DatabaseConnection>` | Database connection from the pool |
 
 ## Generic Views
 
@@ -200,10 +273,17 @@ impl ViewSet for UserViewSet {
 
 ## Server Functions (Pages/WASM)
 
-For full-stack applications using `--with-pages`, server functions allow RPC-style calls from client-side WASM:
+For full-stack applications using `--with-pages`, server functions allow RPC-style calls from client-side WASM. The decorator is `#[server_fn]` (NOT `#[server]`):
 
 ```rust
 use reinhardt::pages::prelude::*;
+
+#[server_fn]
+pub async fn login(username: String, password: String) -> Result<AuthResponse, ServerFnError> {
+    let user = authenticate(&username, &password).await?;
+    let token = create_jwt_token(&user)?;
+    Ok(AuthResponse { token, user_id: user.id })
+}
 
 #[server_fn]
 pub async fn get_user_profile(user_id: i64) -> Result<UserProfile, ServerFnError> {
@@ -211,33 +291,51 @@ pub async fn get_user_profile(user_id: i64) -> Result<UserProfile, ServerFnError
     let user = User::objects().get(user_id).await?;
     Ok(UserProfile::from(user))
 }
-
-#[server_fn]
-pub async fn update_profile(
-    user_id: i64,
-    name: String,
-    bio: String,
-) -> Result<(), ServerFnError> {
-    let db = use_context::<DatabaseConnection>()?;
-    User::objects()
-        .filter(User::id.eq(user_id))
-        .update(User::name.set(name), User::bio.set(bio))
-        .await?;
-    Ok(())
-}
 ```
 
-## Response Helpers
+## Response Building
 
-| Helper | Description | Status Code |
-|--------|-------------|-------------|
-| `Response::json(value)` | JSON response body | 200 OK |
-| `Response::json(value).status(code)` | JSON with custom status | Custom |
-| `Response::no_content()` | Empty 204 response | 204 No Content |
-| `Response::created(value)` | JSON with 201 status | 201 Created |
-| `HttpError::bad_request(msg)` | 400 error response | 400 Bad Request |
-| `HttpError::unauthorized(msg)` | 401 error response | 401 Unauthorized |
-| `HttpError::forbidden(msg)` | 403 error response | 403 Forbidden |
-| `HttpError::not_found(msg)` | 404 error response | 404 Not Found |
-| `HttpError::conflict(msg)` | 409 error response | 409 Conflict |
-| `HttpError::internal(msg)` | 500 error response | 500 Internal Server Error |
+Build responses using `Response::new(StatusCode)` with builder methods:
+
+```rust
+// JSON response
+Ok(Response::new(StatusCode::OK)
+    .with_header("Content-Type", "application/json")
+    .with_body(json::to_vec(&data)?))
+
+// No content (e.g., DELETE)
+Ok(Response::new(StatusCode::NO_CONTENT))
+
+// Created with location header
+Ok(Response::new(StatusCode::CREATED)
+    .with_header("Content-Type", "application/json")
+    .with_header("Location", &format!("/api/users/{}/", user.id))
+    .with_body(json::to_vec(&user_response)?))
+```
+
+## Error Handling
+
+Use `AppError` variants from `reinhardt::core::exception::Error`:
+
+| Variant | HTTP Status | Usage |
+|---------|-------------|-------|
+| `AppError::Validation(msg)` | 400 Bad Request | Invalid input data |
+| `AppError::Authentication(msg)` | 401 Unauthorized | Missing or invalid credentials |
+| `AppError::NotFound(msg)` | 404 Not Found | Resource does not exist |
+| `AppError::Conflict(msg)` | 409 Conflict | Duplicate or conflicting state |
+
+```rust
+use reinhardt::core::exception::Error as AppError;
+
+#[get("/users/{id}/", name = "user_retrieve")]
+pub async fn get_user(Path(id): Path<i64>) -> ViewResult<Response> {
+    let user = User::objects()
+        .get(id)
+        .await
+        .map_err(|_| AppError::NotFound("User not found".into()))?;
+
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(user))?))
+}
+```

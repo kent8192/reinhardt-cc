@@ -12,7 +12,9 @@ Reinhardt supports multiple authentication backends, each enabled via feature fl
 | Token | `auth-token` | `Authorization: Token <key>` | Yes (DB) | Persistent API keys, service accounts |
 | Basic | (always available) | `Authorization: Basic <b64>` | No | Development, simple integrations |
 
-## JWT Authentication Setup
+## JWT Authentication Setup (Verified Pattern)
+
+JWT is the verified production pattern, confirmed in use by the reinhardt-cloud dashboard.
 
 ### Feature Flag
 
@@ -40,49 +42,78 @@ pub fn jwt_config() -> JwtConfig {
 }
 ```
 
-### Usage in Views
+### Middleware Setup
+
+Apply JWT middleware via `UnifiedRouter`:
 
 ```rust
-use reinhardt::auth::prelude::*;
+use reinhardt::auth::jwt::JwtAuthMiddleware;
+
+UnifiedRouter::new()
+    .mount("/api/", app_router)
+    .with_middleware(JwtAuthMiddleware::from_secret(jwt_secret.as_bytes()))
+```
+
+### Auth Extractors
+
+Reinhardt provides two auth extractors, both used with `#[inject]`:
+
+#### AuthInfo (Lightweight)
+
+`AuthInfo` provides lightweight access to the authenticated state without loading the full user model. This is the pattern used in the reinhardt-cloud dashboard.
+
+```rust
 use reinhardt::views::prelude::*;
 
-/// Login endpoint: validates credentials and returns JWT tokens
-pub async fn login(request: Request) -> Response {
-    let data = request.json().await?;
-    let username = data["username"].as_str().unwrap_or_default();
-    let password = data["password"].as_str().unwrap_or_default();
+#[get("/profile/", name = "user_profile")]
+pub async fn get_profile(
+    #[inject] AuthInfo(state): AuthInfo,
+) -> ViewResult<Response> {
+    let user_id = state.user_id();
+    // Use user_id for queries without loading the full user model
+    let profile = Profile::objects().filter(Profile::user_id.eq(user_id)).get().await?;
 
-    let user = authenticate(username, password).await
-        .map_err(|_| HttpError::unauthorized("Invalid credentials"))?;
-
-    let tokens = JwtToken::create_pair(&user)?;
-    Response::json(serde_json::json!({
-        "access": tokens.access,
-        "refresh": tokens.refresh,
-    }))
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&profile)?))
 }
+```
 
-/// Token refresh endpoint
-pub async fn refresh_token(request: Request) -> Response {
-    let data = request.json().await?;
-    let refresh = data["refresh"].as_str().unwrap_or_default();
+#### AuthUser<T> (Full User Model)
 
-    let tokens = JwtToken::refresh(refresh)?;
-    Response::json(serde_json::json!({
-        "access": tokens.access,
-    }))
+`AuthUser<T>` resolves the full user model from the auth token:
+
+```rust
+#[get("/admin/dashboard/", name = "admin_dashboard")]
+pub async fn admin_dashboard(
+    #[inject] reinhardt::AuthUser(user): reinhardt::AuthUser<User>,
+) -> ViewResult<Response> {
+    if !user.is_staff {
+        return Err(AppError::Authentication("Admin access required".into()));
+    }
+    // user is a full User model instance
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&DashboardData::for_user(&user).await?)?))
 }
+```
 
-/// Protected endpoint: requires valid JWT
-#[inject]
-pub async fn get_profile(request: Request, auth: AuthUser) -> Response {
-    let user = auth.user();
-    let serializer = UserSerializer::build(user);
-    Response::json(serializer.serialize())
+### Server Functions with Auth
+
+```rust
+use reinhardt::pages::prelude::*;
+
+#[server_fn]
+pub async fn login(username: String, password: String) -> Result<AuthResponse, ServerFnError> {
+    let user = authenticate(&username, &password).await?;
+    let token = create_jwt_token(&user)?;
+    Ok(AuthResponse { token, user_id: user.id })
 }
 ```
 
 ## Session Authentication Setup
+
+> **Note**: JWT is the verified production pattern (confirmed in the reinhardt-cloud dashboard). Session-based auth types should be verified against the reinhardt-auth source code before use. The dashboard uses JWT exclusively with no session types.
 
 ### Feature Flag
 

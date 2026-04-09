@@ -9,31 +9,31 @@ use reinhardt::db::prelude::*;
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[inject]
+#[get("/users/{id}/", name = "user_retrieve")]
 pub async fn get_user(
-    request: Request,
-    db: Inject<DatabaseConnection>,
-) -> Response {
-    let id: i64 = request.path_param("id")?;
+    Path(id): Path<i64>,
+    #[inject] db: Inject<DatabaseConnection>,
+) -> ViewResult<Response> {
     let user = User::objects()
         .filter(User::id.eq(id))
         .get(&*db)
         .await
-        .map_err(|_| HttpError::not_found("User not found"))?;
+        .map_err(|_| AppError::NotFound("User not found".into()))?;
 
-    Response::json(UserSerializer::build(&user).serialize())
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(user))?))
 }
 ```
 
 ### Transaction Support
 
 ```rust
-#[inject]
+#[post("/transfers/", name = "transfer_create")]
 pub async fn transfer_funds(
-    request: Request,
-    db: Inject<DatabaseConnection>,
-) -> Response {
-    let data: TransferRequest = request.json().await?;
+    Json(data): Json<TransferRequest>,
+    #[inject] db: Inject<DatabaseConnection>,
+) -> ViewResult<Response> {
 
     // Begin a transaction
     let tx = db.begin().await?;
@@ -52,7 +52,9 @@ pub async fn transfer_funds(
 
     tx.commit().await?;
 
-    Response::json(json!({ "status": "completed" }))
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&json!({ "status": "completed" }))?))
 }
 ```
 
@@ -65,34 +67,38 @@ use reinhardt::auth::prelude::*;
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[inject]
+#[get("/profile/", name = "user_profile")]
 pub async fn get_profile(
-    request: Request,
-    auth: AuthUser<User>,
-) -> Response {
-    // auth.user() returns the authenticated User instance
-    let user = auth.user();
-    Response::json(ProfileSerializer::build(user).serialize())
+    #[inject] AuthInfo(state): AuthInfo,
+) -> ViewResult<Response> {
+    let user_id = state.user_id();
+    let profile = Profile::objects().filter(Profile::user_id.eq(user_id)).get().await?;
+
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&ProfileResponse::from(profile))?))
 }
 ```
 
-### Checking Permissions
+### Full User Model with AuthUser<T>
+
+`AuthUser<T>` resolves the full user model from the auth token:
 
 ```rust
-#[inject]
+#[delete("/admin/users/{id}/", name = "admin_user_delete")]
 pub async fn delete_user(
-    request: Request,
-    auth: AuthUser<User>,
-) -> Response {
-    // Check if the authenticated user has admin permissions
-    if !auth.user().is_staff {
-        return Err(HttpError::forbidden("Admin access required"));
+    Path(id): Path<i64>,
+    #[inject] reinhardt::AuthUser(admin): reinhardt::AuthUser<User>,
+) -> ViewResult<Response> {
+    if !admin.is_staff {
+        return Err(AppError::Authentication("Admin access required".into()));
     }
 
-    let id: i64 = request.path_param("id")?;
-    let user = User::objects().get(id).await?;
+    let user = User::objects().get(id).await
+        .map_err(|_| AppError::NotFound("User not found".into()))?;
     user.delete().await?;
-    Response::no_content()
+
+    Ok(Response::new(StatusCode::NO_CONTENT))
 }
 ```
 
@@ -101,51 +107,54 @@ pub async fn delete_user(
 Use `Option<AuthUser<T>>` for endpoints that work for both authenticated and anonymous users:
 
 ```rust
-#[inject]
+#[get("/posts/", name = "post_list")]
 pub async fn list_posts(
-    request: Request,
-    auth: Option<AuthUser<User>>,
-) -> Response {
+    #[inject] auth: Option<reinhardt::AuthUser<User>>,
+) -> ViewResult<Response> {
     let mut query = Post::objects().filter(Post::is_published.eq(true));
 
     // Authenticated users see their own drafts too
-    if let Some(auth) = &auth {
-        query = query.or_filter(Post::author_id.eq(auth.user().id));
+    if let Some(reinhardt::AuthUser(user)) = &auth {
+        query = query.or_filter(Post::author_id.eq(user.id));
     }
 
     let posts = query.all().await?;
-    Response::json(PostSerializer::build_many(&posts).serialize())
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&posts)?))
 }
 ```
 
 ## Session Injection
 
-`Session` provides access to the current request's session key-value store.
+> **Note**: JWT is the verified production pattern (confirmed in the reinhardt-cloud dashboard). Session-based types should be verified against `reinhardt/crates/reinhardt-auth/src/sessions/` before use.
+
+`Session` provides access to the current request's session key-value store (when using session-based auth).
 
 ```rust
 use reinhardt::auth::prelude::*;
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[inject]
+#[get("/cart/", name = "cart_get")]
 pub async fn get_cart(
-    request: Request,
-    session: Inject<Session>,
-) -> Response {
+    #[inject] session: Inject<Session>,
+) -> ViewResult<Response> {
     let cart: Option<Cart> = session.get("cart").await?;
-    match cart {
-        Some(cart) => Response::json(cart),
-        None => Response::json(json!({ "items": [] })),
-    }
+    let body = match cart {
+        Some(cart) => json::to_vec(&cart)?,
+        None => json::to_vec(&json!({ "items": [] }))?,
+    };
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(body))
 }
 
-#[inject]
+#[post("/cart/items/", name = "cart_add_item")]
 pub async fn add_to_cart(
-    request: Request,
-    session: Inject<Session>,
-) -> Response {
-    let item: CartItem = request.json().await?;
-
+    Json(item): Json<CartItem>,
+    #[inject] session: Inject<Session>,
+) -> ViewResult<Response> {
     let mut cart: Cart = session
         .get("cart")
         .await?
@@ -154,7 +163,9 @@ pub async fn add_to_cart(
     cart.add(item);
     session.set("cart", &cart).await?;
 
-    Response::json(cart)
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&cart)?))
 }
 ```
 
@@ -163,31 +174,32 @@ pub async fn add_to_cart(
 Handlers can receive any combination of injectable types:
 
 ```rust
-#[inject]
+#[post("/orders/", name = "order_create")]
 pub async fn create_order(
-    request: Request,
-    auth: AuthUser<User>,
-    db: Inject<DatabaseConnection>,
-    email_service: Inject<Arc<EmailService>>,
-    session: Inject<Session>,
-) -> Response {
+    #[inject] AuthInfo(state): AuthInfo,
+    #[inject] db: Inject<DatabaseConnection>,
+    #[inject] email_service: Inject<Arc<EmailService>>,
+    #[inject] session: Inject<Session>,
+) -> ViewResult<Response> {
     let cart: Cart = session
         .get("cart")
         .await?
-        .ok_or_else(|| HttpError::bad_request("Cart is empty"))?;
+        .ok_or_else(|| AppError::Validation("Cart is empty".into()))?;
 
     // Create order in a transaction
     let tx = db.begin().await?;
-    let order = Order::create_from_cart(&cart, auth.user(), &tx).await?;
+    let order = Order::create_from_cart(&cart, state.user_id(), &tx).await?;
     tx.commit().await?;
 
     // Clear cart from session
     session.remove("cart").await?;
 
-    // Send confirmation email (non-blocking)
-    email_service.send_order_confirmation(&order, auth.user()).await?;
+    // Send confirmation email
+    email_service.send_order_confirmation(&order, state.user_id()).await?;
 
-    Response::created(OrderSerializer::build(&order).serialize())
+    Ok(Response::new(StatusCode::CREATED)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&OrderResponse::from(order))?))
 }
 ```
 
@@ -255,27 +267,29 @@ impl UserRepository {
 ### Using the Repository in Handlers
 
 ```rust
-#[inject]
+#[get("/users/", name = "user_list")]
 pub async fn list_users(
-    request: Request,
-    user_repo: Inject<UserRepository>,
-) -> Response {
+    #[inject] user_repo: Inject<UserRepository>,
+) -> ViewResult<Response> {
     let users = user_repo.find_active().await?;
-    Response::json(UserSerializer::build_many(&users).serialize())
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&users)?))
 }
 
-#[inject]
+#[get("/users/by-email/{email}/", name = "user_by_email")]
 pub async fn find_by_email(
-    request: Request,
-    user_repo: Inject<UserRepository>,
-) -> Response {
-    let email: String = request.path_param("email")?;
+    Path(email): Path<String>,
+    #[inject] user_repo: Inject<UserRepository>,
+) -> ViewResult<Response> {
     let user = user_repo
         .find_by_email(&email)
         .await?
-        .ok_or_else(|| HttpError::not_found("User not found"))?;
+        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
 
-    Response::json(UserSerializer::build(&user).serialize())
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(user))?))
 }
 ```
 

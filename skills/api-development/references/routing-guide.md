@@ -2,24 +2,41 @@
 
 ## App-Level URL Configuration
 
-Each app defines its routes using a `ServerRouter`. Routes are defined in the app's `urls.rs` file.
+Each app defines its routes using a `ServerRouter`. Handlers decorated with `#[get]`, `#[post]`, etc. are registered via `.endpoint()`.
 
 ```rust
 // src/apps/user/urls.rs
 use reinhardt::urls::prelude::*;
 use super::views;
 
-pub fn router() -> ServerRouter {
-    let mut router = ServerRouter::new();
-
-    router.endpoint("/", views::list_users);
-    router.endpoint("/{id}", views::get_user);
-    router.endpoint("/", views::create_user);
-    router.endpoint("/{id}", views::update_user);
-    router.endpoint("/{id}", views::delete_user);
-
-    router
+pub fn url_patterns() -> ServerRouter {
+    ServerRouter::new()
+        .endpoint(views::list_users)
+        .endpoint(views::get_user)
+        .endpoint(views::create_user)
+        .endpoint(views::update_user)
+        .endpoint(views::delete_user)
 }
+```
+
+The HTTP method and path come from the decorator on each handler:
+
+```rust
+// src/apps/user/views.rs
+#[get("/users/", name = "user_list")]
+pub async fn list_users(Query(params): Query<PaginationParams>) -> ViewResult<Response> { ... }
+
+#[get("/users/{id}/", name = "user_retrieve")]
+pub async fn get_user(Path(id): Path<i64>) -> ViewResult<Response> { ... }
+
+#[post("/users/", name = "user_create")]
+pub async fn create_user(Json(body): Json<CreateUserRequest>) -> ViewResult<Response> { ... }
+
+#[patch("/users/{id}/", name = "user_update")]
+pub async fn update_user(Path(id): Path<i64>, Json(body): Json<UpdateUserRequest>) -> ViewResult<Response> { ... }
+
+#[delete("/users/{id}/", name = "user_delete")]
+pub async fn delete_user(Path(id): Path<i64>) -> ViewResult<Response> { ... }
 ```
 
 ### ViewSet Routing
@@ -31,7 +48,7 @@ For ViewSets, the router auto-generates standard CRUD routes:
 use reinhardt::urls::prelude::*;
 use super::views::UserViewSet;
 
-pub fn router() -> ServerRouter {
+pub fn url_patterns() -> ServerRouter {
     let mut router = ServerRouter::new();
 
     // Registers: GET /, POST /, GET /{id}, PUT /{id}, PATCH /{id}, DELETE /{id}
@@ -43,64 +60,114 @@ pub fn router() -> ServerRouter {
 
 ## Root-Level URL Configuration
 
-The project's root `urls.rs` uses `UnifiedRouter` to combine all app routers:
+The project's root `urls.rs` uses `UnifiedRouter` to combine all app routers. It supports DI context, middleware, and server functions:
+
+The root router function MUST be annotated with `#[routes]`:
 
 ```rust
-// src/urls.rs
-use reinhardt::urls::prelude::*;
-use crate::apps;
+// src/config/urls.rs
+use reinhardt::routes;
+use reinhardt::urls::prelude::UnifiedRouter;
+use reinhardt::di::{InjectionContext, SingletonScope};
 
-pub fn root_router() -> UnifiedRouter {
-    let mut router = UnifiedRouter::new();
+#[routes]
+pub fn routes() -> UnifiedRouter {
+    let singleton_scope = Arc::new(SingletonScope::new());
+    let di_ctx = Arc::new(InjectionContext::builder(singleton_scope).build());
 
-    // Mount app routers under path prefixes
-    router.include("/api/users", apps::user::urls::router());
-    router.include("/api/posts", apps::post::urls::router());
-    router.include("/api/auth", apps::auth::urls::router());
+    let jwt_secret = crate::config::settings::get_jwt_secret()
+        .expect("JWT secret must be configured");
 
-    // Static/admin routes
-    router.include("/admin", reinhardt::admin::urls::router());
-
-    router
+    UnifiedRouter::new()
+        .mount("/api/", crate::apps::user::urls::url_patterns())
+        .mount("/api/", crate::apps::auth::urls::url_patterns())
+        .server(|s| {
+            s.server_fn(server::login::login::marker)
+             .server_fn(server::register::register::marker)
+        })
+        .with_di_context(di_ctx)
+        .with_middleware(SecurityMiddleware::new())
+        .with_middleware(JwtAuthMiddleware::from_secret(jwt_secret.as_bytes()))
 }
+```
+
+### UnifiedRouter Methods
+
+| Method | Description |
+|--------|-------------|
+| `.mount(prefix, router)` | Mount an app's `ServerRouter` under a URL prefix |
+| `.mount_unified(prefix, router)` | Mount a child `UnifiedRouter` (extracts its server router) |
+| `.with_prefix(prefix)` | Set a URL prefix for the entire server router (alternative to `.mount()`) |
+| `.with_di_context(ctx)` | Attach the DI injection context |
+| `.with_di_registrations(regs)` | Apply deferred DI registrations (e.g., from admin setup) |
+| `.with_middleware(mw)` | Add global middleware (e.g., `JwtAuthMiddleware`) |
+| `.server(\|s\| { ... })` | Register server functions for Pages/WASM |
+
+### with_prefix vs mount
+
+Two ways to organize routes under a common prefix:
+
+```rust
+// Option A: with_prefix — sets prefix on the router itself
+pub fn api_routes() -> ServerRouter {
+    ServerRouter::new()
+        .with_prefix("/api/")
+        .endpoint(views::list_users)
+        .endpoint(views::create_user)
+}
+
+// Option B: mount — parent mounts child under a prefix (used by reinhardt-cloud dashboard)
+UnifiedRouter::new()
+    .mount("/api/", user_routes())
+    .mount("/api/", auth_routes())
+```
+
+### DI Context Setup
+
+Build an `InjectionContext` with a `SingletonScope` and attach it to the router. Access the context in middleware via `request.get_di_context::<Arc<InjectionContext>>()`:
+
+```rust
+use reinhardt::di::{InjectionContext, SingletonScope};
+
+let singleton_scope = Arc::new(SingletonScope::new());
+let di_ctx = Arc::new(InjectionContext::builder(singleton_scope).build());
+
+// Register singletons
+di_ctx.set_singleton(MyService::new());
+
+UnifiedRouter::new()
+    .mount("/api/", app_routes())
+    .with_di_context(di_ctx)
+
+// In middleware: access the context from the request
+// let ctx = request.get_di_context::<Arc<InjectionContext>>();
 ```
 
 ## URL Path Parameters
 
-URL patterns support path parameters using `{param}` syntax. Parameters are extracted from the request inside the handler function:
+URL patterns support path parameters using `{param}` syntax. Parameters are extracted via the `Path<T>` extractor in the handler signature:
 
 ```rust
-// Simple path parameter
-pub async fn get_user(request: Request) -> Response {
-    let id: i64 = request.path_param("id")?;
+// Single path parameter
+#[get("/users/{id}/", name = "user_retrieve")]
+pub async fn get_user(Path(id): Path<i64>) -> ViewResult<Response> {
+    // id is extracted as i64 from the URL
+    let user = User::objects().get(id).await?;
     // ...
 }
 
-// Multiple path parameters
-pub async fn get_user_post(request: Request) -> Response {
-    let user_id: i64 = request.path_param("user_id")?;
-    let post_id: i64 = request.path_param("post_id")?;
+// Multiple path parameters (use a tuple)
+#[get("/users/{user_id}/posts/{post_id}/", name = "user_post_retrieve")]
+pub async fn get_user_post(
+    Path((user_id, post_id)): Path<(i64, i64)>,
+) -> ViewResult<Response> {
     // ...
 }
 
 // String path parameter
-pub async fn get_by_username(request: Request) -> Response {
-    let username: String = request.path_param("username")?;
+#[get("/users/{username}/", name = "user_by_name")]
+pub async fn get_by_username(Path(username): Path<String>) -> ViewResult<Response> {
     // ...
-}
-```
-
-> **Note**: Verify `request.path_param()` signature against latest reinhardt source.
-
-### Route Registration with Path Parameters
-
-```rust
-pub fn router() -> ServerRouter {
-    let mut router = ServerRouter::new();
-    router.endpoint("/{id}", views::get_user);
-    router.endpoint("/{user_id}/posts/{post_id}", views::get_user_post);
-    router.endpoint("/{username}", views::get_by_username);
-    router
 }
 ```
 
@@ -110,30 +177,21 @@ Routers can be nested to any depth:
 
 ```rust
 pub fn api_v1_router() -> ServerRouter {
-    let mut router = ServerRouter::new();
-    router.include("/users", apps::user::urls::router());
-    router.include("/posts", apps::post::urls::router());
-    router
-}
-
-pub fn api_v2_router() -> ServerRouter {
-    let mut router = ServerRouter::new();
-    router.include("/users", apps::user::urls::v2_router());
-    router.include("/posts", apps::post::urls::v2_router());
-    router
+    ServerRouter::new()
+        .endpoint(views::v1::list_users)
+        .endpoint(views::v1::get_user)
 }
 
 pub fn root_router() -> UnifiedRouter {
-    let mut router = UnifiedRouter::new();
-    router.include("/api/v1", api_v1_router());
-    router.include("/api/v2", api_v2_router());
-    router
+    UnifiedRouter::new()
+        .mount("/api/v1/users/", api_v1_router())
+        .mount("/api/v2/users/", api_v2_router())
 }
 ```
 
 This produces routes like:
-- `GET /api/v1/users/` -> `apps::user::views::list_users`
-- `GET /api/v2/users/` -> `apps::user::views::v2::list_users`
+- `GET /api/v1/users/` -> `views::v1::list_users`
+- `GET /api/v2/users/` -> `views::v2::list_users`
 
 ## Per-Route Middleware
 
@@ -146,22 +204,22 @@ pub fn router() -> ServerRouter {
     let mut router = ServerRouter::new();
 
     // Public routes (no auth required)
-    router.endpoint("/health", views::health_check);
-    router.endpoint("/login", views::login);
+    router.endpoint(views::health_check);
+    router.endpoint(views::login);
 
     // Protected group with authentication middleware
     let mut protected = ServerRouter::new();
     protected.middleware(AuthenticationMiddleware::new());
-    protected.endpoint("/profile", views::get_profile);
-    protected.endpoint("/settings", views::update_settings);
+    protected.endpoint(views::get_profile);
+    protected.endpoint(views::update_settings);
     router.include("/", protected);
 
     // Admin group with additional authorization
     let mut admin = ServerRouter::new();
     admin.middleware(AuthenticationMiddleware::new());
     admin.middleware(RequirePermission::new("is_staff"));
-    admin.endpoint("/dashboard", views::admin_dashboard);
-    admin.endpoint("/users", views::admin_list_users);
+    admin.endpoint(views::admin_dashboard);
+    admin.endpoint(views::admin_list_users);
     router.include("/admin", admin);
 
     router
@@ -172,6 +230,7 @@ pub fn router() -> ServerRouter {
 
 | Middleware | Description |
 |-----------|-------------|
+| `JwtAuthMiddleware::from_secret(secret)` | JWT authentication (verified pattern from dashboard) |
 | `AuthenticationMiddleware` | Validates auth credentials and populates `AuthUser` |
 | `RequirePermission::new(perm)` | Checks user has the specified permission |
 | `CorsMiddleware` | Cross-Origin Resource Sharing headers |

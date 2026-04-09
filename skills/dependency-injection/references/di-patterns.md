@@ -14,12 +14,13 @@ pub struct AppConfig {
 // AppConfig is auto-injectable because it implements Default + Clone + Send + Sync + 'static.
 // No registration needed.
 
-#[inject]
+#[get("/config/", name = "show_config")]
 pub async fn show_config(
-    request: Request,
-    config: Inject<AppConfig>,
-) -> Response {
-    Response::json(json!({ "debug": config.debug }))
+    #[inject] config: Inject<AppConfig>,
+) -> ViewResult<Response> {
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&json!({ "debug": config.debug }))?))
 }
 ```
 
@@ -59,31 +60,33 @@ impl Injectable for EmailService {
 
 ## Using `#[inject]` in Handlers
 
-Apply `#[inject]` to view functions to receive dependencies as parameters.
+Apply `#[inject]` to handler parameters to receive dependencies. Handlers use HTTP method decorators (`#[get]`, `#[post]`, etc.) for routing.
 
 ```rust
 use reinhardt::di::prelude::*;
 use reinhardt::views::prelude::*;
 
-#[inject]
+#[get("/users/", name = "user_list")]
 pub async fn list_users(
-    request: Request,
-    user_service: Inject<Arc<UserService>>,
-) -> Response {
+    #[inject] user_service: Inject<Arc<UserService>>,
+) -> ViewResult<Response> {
     let users = user_service.list_active().await?;
-    Response::json(users)
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&users)?))
 }
 
-#[inject]
+#[post("/users/", name = "user_create")]
 pub async fn create_user(
-    request: Request,
-    user_service: Inject<Arc<UserService>>,
-    email_service: Inject<Arc<EmailService>>,
-) -> Response {
-    let data = request.json().await?;
-    let user = user_service.create(data).await?;
+    Json(body): Json<CreateUserRequest>,
+    #[inject] user_service: Inject<Arc<UserService>>,
+    #[inject] email_service: Inject<Arc<EmailService>>,
+) -> ViewResult<Response> {
+    let user = user_service.create(&body).await?;
     email_service.send_welcome(&user).await?;
-    Response::created(user)
+    Ok(Response::new(StatusCode::CREATED)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&UserResponse::from(user))?))
 }
 ```
 
@@ -92,16 +95,17 @@ pub async fn create_user(
 Handlers can receive multiple injected dependencies. Each is resolved independently.
 
 ```rust
-#[inject]
+#[get("/dashboard/", name = "dashboard")]
 pub async fn dashboard(
-    request: Request,
-    auth: AuthUser,
-    user_service: Inject<Arc<UserService>>,
-    analytics: Inject<Arc<AnalyticsService>>,
-    config: Inject<AppConfig>,
-) -> Response {
-    let stats = analytics.get_user_stats(auth.id()).await?;
-    Response::json(stats)
+    #[inject] AuthInfo(state): AuthInfo,
+    #[inject] user_service: Inject<Arc<UserService>>,
+    #[inject] analytics: Inject<Arc<AnalyticsService>>,
+    #[inject] config: Inject<AppConfig>,
+) -> ViewResult<Response> {
+    let stats = analytics.get_user_stats(state.user_id()).await?;
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&stats)?))
 }
 ```
 
@@ -168,14 +172,15 @@ let service = Arc::new(UserService::new(pool.clone()));
 app.inject_singleton::<Arc<UserService>>(service);
 
 // Injection in handler
-#[inject]
+#[get("/users/", name = "user_list")]
 pub async fn list_users(
-    request: Request,
-    user_service: Inject<Arc<UserService>>,
-) -> Response {
+    #[inject] user_service: Inject<Arc<UserService>>,
+) -> ViewResult<Response> {
     // user_service is Arc<UserService> — clone is cheap
     let users = user_service.list_all().await?;
-    Response::json(users)
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&users)?))
 }
 ```
 
