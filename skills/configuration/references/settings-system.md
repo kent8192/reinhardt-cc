@@ -152,7 +152,7 @@ Settings are registered in the DI container and injected into handlers:
 ```rust
 #[get("/info/", name = "app_info")]
 pub async fn app_info(
-    #[inject] settings: Inject<Arc<ProjectSettings>>,
+    #[inject] settings: Depends<ProjectSettings>,
 ) -> ViewResult<Response> {
     let debug = settings.core.debug;
     // ...

@@ -124,14 +124,14 @@ UnifiedRouter::new()
 
 ### DI Context Setup
 
-Build an `InjectionContext` with a `SingletonScope` and attach it to the router. Register singletons via `#[injectable_factory]` macros (not `set_singleton`). Access the context in middleware via `request.get_di_context::<Arc<InjectionContext>>()`:
+Build an `InjectionContext` with a `SingletonScope` and attach it to the router. Register singletons via `#[injectable_factory]` macros (not `set_singleton`). Access the context in middleware via `request.get_di_context::<InjectionContext>()`:
 
 ```rust
 use reinhardt::di::{InjectionContext, SingletonScope};
 
 // Build DI context in the #[routes] function
 let singleton_scope = Arc::new(SingletonScope::new());
-let di_ctx = Arc::new(InjectionContext::builder(singleton_scope).build());
+let di_ctx = InjectionContext::builder(singleton_scope).build();
 
 UnifiedRouter::new()
     .mount("/api/", app_routes())
@@ -144,7 +144,7 @@ Register services using `#[injectable_factory]` instead of manual `set_singleton
 use reinhardt::di::prelude::*;
 
 #[injectable_factory(scope = "singleton")]
-async fn create_email_service(#[inject] config: Arc<AppConfig>) -> EmailService {
+async fn create_email_service(#[inject] config: Depends<AppConfig>) -> EmailService {
     EmailService::new(&config.email_api_key)
 }
 ```

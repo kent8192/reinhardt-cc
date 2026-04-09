@@ -172,8 +172,8 @@ pub async fn admin_list_users(
 |------|-------------|
 | `AuthInfo` | Lightweight JWT auth state with `state.user_id()` |
 | `AuthUser<T>` | Full user model resolution from auth token |
-| `Inject<Arc<T>>` | Shared service from the DI container |
-| `Inject<DatabaseConnection>` | Database connection from the pool |
+| `Depends<T>` | Shared service from the DI container |
+| `Depends<DatabaseConnection>` | Database connection from the pool |
 
 ## Generic Views
 

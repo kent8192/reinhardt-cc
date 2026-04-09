@@ -33,7 +33,7 @@ use reinhardt::auth::jwt::{JwtConfig, Algorithm};
 use reinhardt::di::prelude::*;
 
 #[injectable_factory(scope = "singleton")]
-async fn jwt_config(#[inject] settings: Arc<ProjectSettings>) -> JwtConfig {
+async fn jwt_config(#[inject] settings: Depends<ProjectSettings>) -> JwtConfig {
     JwtConfig {
         secret_key: settings.jwt_secret_key.clone(),
         algorithm: Algorithm::HS256,
@@ -134,7 +134,7 @@ use reinhardt::sessions::{SessionConfig, SessionEngine};
 use reinhardt::di::prelude::*;
 
 #[injectable_factory(scope = "singleton")]
-async fn session_config(#[inject] settings: Arc<ProjectSettings>) -> SessionConfig {
+async fn session_config(#[inject] settings: Depends<ProjectSettings>) -> SessionConfig {
     SessionConfig {
         engine: SessionEngine::Database, // or Redis, Cookie
         cookie_name: "sessionid".to_string(),

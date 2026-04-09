@@ -59,7 +59,7 @@ timeout_secs = 60
 ```rust
 #[get("/status/", name = "status")]
 pub async fn status(
-    #[inject] settings: Inject<Arc<ProjectSettings>>,
+    #[inject] settings: Depends<ProjectSettings>,
 ) -> ViewResult<Response> {
     let api_key = &settings.myapp.api_key;
     let timeout = settings.myapp.timeout_secs;
