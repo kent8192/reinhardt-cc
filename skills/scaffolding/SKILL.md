@@ -30,7 +30,7 @@ Guide developers through creating new reinhardt-web projects and adding apps wit
 5. **Ask auth method** — jwt, session, oauth, token, or none
 6. **Execute scaffolding**:
    ```bash
-   reinhardt-admin startproject <name> [--restful|--with-pages]
+   reinhardt-admin startproject <name> [-t restful|mtv]
    ```
 7. **Adjust Cargo.toml** — set feature flags based on selections
 8. **Verify** — run `cargo check` to confirm configuration compiles
@@ -38,12 +38,13 @@ Guide developers through creating new reinhardt-web projects and adding apps wit
 ### Adding an App
 
 1. **Ask app name** — lowercase, singular (e.g., "user", "post", "order")
-2. **Execute**:
+2. **Ask template type** — restful (default) or mtv (Pages)
+3. **Execute**:
    ```bash
-   reinhardt-admin startapp <name>
+   reinhardt-admin startapp <name> [-t restful|mtv]
    ```
-3. **Verify structure** — read `references/app-structure.md` for expected layout
-4. **Register app** — ensure app module is added to `src/apps/` and registered
+4. **Verify structure** — read `references/app-structure.md` for expected layout
+5. **Register app** — add module to `src/apps.rs` and entry to `installed_apps!` macro in `src/config/apps.rs`
 
 ## Important Rules
 
@@ -61,5 +62,7 @@ If the user wants to immediately set up models after scaffolding, read
 
 When you need the latest CLI options or template details:
 1. Run `reinhardt-admin startproject --help` and `reinhardt-admin startapp --help`
-2. Read `reinhardt/crates/reinhardt-admin-cli/src/` for template implementation
-3. Read `reinhardt/crates/reinhardt-commands/src/start_commands.rs` for command definitions
+2. Read `reinhardt/crates/reinhardt-admin-cli/src/main.rs` for CLI argument definitions
+3. Read `reinhardt/crates/reinhardt-commands/src/start_commands.rs` for command implementation
+4. Read `reinhardt/crates/reinhardt-commands/templates/` for actual template files
+5. Read `reinhardt/Cargo.toml` `[features]` section for current feature flags
