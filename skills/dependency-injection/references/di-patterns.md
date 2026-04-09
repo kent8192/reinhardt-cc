@@ -261,6 +261,25 @@ impl Injectable for OrderService {
 }
 ```
 
+## Accessing DI Context: `get_di_context`
+
+Inside `#[injectable]` or `#[injectable_factory]` execution, use the global `get_di_context` function to access the DI context:
+
+```rust
+use reinhardt::di::{get_di_context, ContextLevel};
+
+// ContextLevel::Root — resolves from the singleton scope
+let root_ctx = get_di_context(ContextLevel::Root);
+
+// ContextLevel::Current — resolves from the request/transient scope
+let current_ctx = get_di_context(ContextLevel::Current);
+```
+
+| ContextLevel | Maps to scope | Use case |
+|-------------|---------------|----------|
+| `Root` | `scope = "singleton"` | Access app-wide singletons |
+| `Current` | `scope = "request"` / `scope = "transient"` | Access per-request or transient dependencies |
+
 ## Resolution Order
 
 When resolving a type `T`:

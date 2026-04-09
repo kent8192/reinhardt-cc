@@ -157,8 +157,8 @@ let ctx = request.get_di_context::<InjectionContext>();
 
 // In #[injectable_factory] or #[injectable]: global function
 use reinhardt::di::{get_di_context, ContextLevel};
-let ctx = get_di_context(ContextLevel::Root);    // root context
-let ctx = get_di_context(ContextLevel::Current); // current resolution context
+let ctx = get_di_context(ContextLevel::Root);    // singleton scope context
+let ctx = get_di_context(ContextLevel::Current); // request/transient scope context
 ```
 
 ## URL Path Parameters
