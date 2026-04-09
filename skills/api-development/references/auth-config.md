@@ -25,14 +25,16 @@ reinhardt = { version = "0.1.0-alpha", features = ["auth-jwt", "argon2-hasher"] 
 
 ### Configuration
 
-```rust
-// src/settings.rs
-use reinhardt::auth::jwt::{JwtConfig, Algorithm};
+Use `#[injectable_factory]` to create `JwtConfig` from `ProjectSettings`:
 
-pub fn jwt_config() -> JwtConfig {
+```rust
+use reinhardt::auth::jwt::{JwtConfig, Algorithm};
+use reinhardt::di::prelude::*;
+
+#[injectable_factory(scope = "singleton")]
+async fn jwt_config(#[inject] settings: Arc<ProjectSettings>) -> JwtConfig {
     JwtConfig {
-        secret_key: std::env::var("JWT_SECRET_KEY")
-            .expect("JWT_SECRET_KEY must be set"),
+        secret_key: settings.jwt_secret_key.clone(),
         algorithm: Algorithm::HS256,
         access_token_lifetime: Duration::from_secs(60 * 15),   // 15 minutes
         refresh_token_lifetime: Duration::from_secs(60 * 60 * 24 * 7), // 7 days
@@ -124,17 +126,20 @@ reinhardt = { version = "0.1.0-alpha", features = ["auth-session", "sessions", "
 
 ### Configuration
 
-```rust
-// src/settings.rs
-use reinhardt::sessions::{SessionConfig, SessionEngine};
+Use `#[injectable_factory]` to create `SessionConfig` from `ProjectSettings`:
 
-pub fn session_config() -> SessionConfig {
+```rust
+use reinhardt::sessions::{SessionConfig, SessionEngine};
+use reinhardt::di::prelude::*;
+
+#[injectable_factory(scope = "singleton")]
+async fn session_config(#[inject] settings: Arc<ProjectSettings>) -> SessionConfig {
     SessionConfig {
         engine: SessionEngine::Database, // or Redis, Cookie
         cookie_name: "sessionid".to_string(),
         cookie_age: Duration::from_secs(60 * 60 * 24 * 14), // 2 weeks
-        cookie_secure: true,    // HTTPS only in production
-        cookie_httponly: true,   // Not accessible via JavaScript
+        cookie_secure: settings.is_production(),
+        cookie_httponly: true,
         cookie_samesite: SameSite::Lax,
     }
 }
@@ -150,27 +155,45 @@ pub fn session_config() -> SessionConfig {
 
 ### Usage in Views
 
+Use HTTP method decorators or `#[server_fn]` — never raw `async fn` with `Request`:
+
 ```rust
 use reinhardt::auth::prelude::*;
 use reinhardt::views::prelude::*;
 
-pub async fn session_login(request: Request) -> Response {
-    let data = request.json().await?;
-    let username = data["username"].as_str().unwrap_or_default();
-    let password = data["password"].as_str().unwrap_or_default();
-
-    let user = authenticate(username, password).await
-        .map_err(|_| HttpError::unauthorized("Invalid credentials"))?;
+#[post("/auth/login/", name = "session_login", pre_validate = true)]
+pub async fn session_login(
+    Json(data): Json<LoginRequest>,
+) -> ViewResult<Response> {
+    let user = authenticate(&data.username, &data.password).await
+        .map_err(|_| AppError::Authentication("Invalid credentials".into()))?;
 
     // Creates a session and sets the session cookie
-    login(&request, &user).await?;
+    login(&user).await?;
 
-    Response::json(serde_json::json!({ "status": "ok" }))
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&json!({ "status": "ok" }))?))
 }
 
-pub async fn session_logout(request: Request) -> Response {
-    logout(&request).await?;
-    Response::json(serde_json::json!({ "status": "ok" }))
+#[post("/auth/logout/", name = "session_logout")]
+pub async fn session_logout() -> ViewResult<Response> {
+    logout().await?;
+
+    Ok(Response::new(StatusCode::OK)
+        .with_header("Content-Type", "application/json")
+        .with_body(json::to_vec(&json!({ "status": "ok" }))?))
+}
+```
+
+Or using server functions (for Pages/WASM):
+
+```rust
+#[server_fn]
+pub async fn session_login(username: String, password: String) -> Result<AuthResponse, ServerFnError> {
+    let user = authenticate(&username, &password).await?;
+    login(&user).await?;
+    Ok(AuthResponse { status: "ok".to_string() })
 }
 ```
 
