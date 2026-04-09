@@ -1,0 +1,18 @@
+{
+  "name": "reinhardt-cc-dev",
+  "description": "Development marketplace for reinhardt-cc plugin",
+  "owner": {
+    "name": "kent8192"
+  },
+  "plugins": [
+    {
+      "name": "reinhardt-cc",
+      "description": "Claude Code plugin for reinhardt-web development",
+      "version": "1.0.0",
+      "source": "./",
+      "author": {
+        "name": "kent8192"
+      }
+    }
+  ]
+}
