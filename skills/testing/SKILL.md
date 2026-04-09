@@ -57,6 +57,7 @@ Guide developers through writing high-quality tests using rstest, AAA pattern, r
 ## Dynamic References
 
 For the latest test utilities:
-1. Read `reinhardt/crates/reinhardt-test/src/lib.rs` for available types
-2. Read `reinhardt/crates/reinhardt-test/src/fixtures/` for built-in fixtures
-3. Grep for `#[rstest]` in `reinhardt/tests/` for real test examples
+1. Read `reinhardt/crates/reinhardt-test/src/lib.rs` for re-exports and public API
+2. Read `reinhardt/crates/reinhardt-test/src/fixtures/` for auth, admin, and E2E fixtures
+3. Read `reinhardt/crates/reinhardt-testkit/src/` for APIClient, APIRequestFactory, TestContainers, and migration fixtures
+4. Grep for `#[rstest]` in `reinhardt/tests/integration/` for real integration test examples

@@ -49,28 +49,31 @@ fn test_default_is_active() {
 
 ## Async Tests
 
-Combine `#[rstest]` with `#[tokio::test]` for async tests:
+Combine `#[rstest]` with `#[tokio::test]` for async tests. Use `reinhardt-test` fixtures for the Arrange phase:
 
 ```rust
 use rstest::*;
-use reinhardt::db::prelude::*;
+use reinhardt_test::prelude::*;
+use reinhardt_test::fixtures::auth::*;
 
 #[rstest]
 #[tokio::test]
-async fn test_user_query() {
-    // Arrange
-    let pool = test_pool().await;
-    let user = create_test_user(&pool).await;
+async fn test_user_query(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<PgPool>, u16, String),
+    test_user: TestUser,
+) {
+    // Arrange — provided by fixtures
+    let (_container, pool, _port, _url) = postgres_container.await;
 
     // Act
     let found = User::objects()
-        .filter(User::id.eq(user.id))
-        .get(&pool)
+        .filter(User::username.eq(&test_user.username))
+        .get(pool.as_ref())
         .await
         .unwrap();
 
     // Assert
-    assert_eq!(found.username(), user.username());
+    assert_eq!(found.username(), test_user.username);
 }
 ```
 
@@ -100,27 +103,27 @@ fn test_config_debug_mode(sample_config: AppConfig) {
 
 ```rust
 use rstest::*;
+use reinhardt_test::fixtures::postgres_container;
 
 #[fixture]
-async fn test_pool() -> TestPool {
-    TestPool::setup().await
-}
-
-#[fixture]
-async fn seeded_pool(#[future] test_pool: TestPool) -> TestPool {
-    let pool = test_pool.await;
-    seed_test_data(&pool).await;
-    pool
+async fn seeded_pool(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<PgPool>, u16, String),
+) -> (ContainerAsync<GenericImage>, Arc<PgPool>) {
+    let (container, pool, _port, _url) = postgres_container.await;
+    seed_test_data(pool.as_ref()).await;
+    (container, pool)
 }
 
 #[rstest]
 #[tokio::test]
-async fn test_with_seeded_data(#[future] seeded_pool: TestPool) {
+async fn test_with_seeded_data(
+    #[future] seeded_pool: (ContainerAsync<GenericImage>, Arc<PgPool>),
+) {
     // Arrange
-    let pool = seeded_pool.await;
+    let (_container, pool) = seeded_pool.await;
 
     // Act
-    let count = User::objects().count(&pool).await.unwrap();
+    let count = User::objects().count(pool.as_ref()).await.unwrap();
 
     // Assert
     assert!(count > 0);
@@ -143,6 +146,36 @@ fn test_default_role(user_with_role: User) {
 #[rstest]
 fn test_admin_role(#[with("admin")] user_with_role: User) {
     assert_eq!(user_with_role.role(), "admin");
+}
+```
+
+### Using reinhardt-test Provided Fixtures
+
+`reinhardt-test` provides ready-to-use fixtures. Inject them directly as test parameters:
+
+```rust
+use reinhardt_test::fixtures::auth::*;
+use reinhardt_test::prelude::*;
+
+#[rstest]
+#[tokio::test]
+async fn test_authenticated_view(
+    api_client: APIClient,      // from reinhardt-testkit
+    test_user: TestUser,        // from reinhardt-test auth fixtures
+    jwt_auth: JwtAuth,          // from reinhardt-test auth fixtures
+) {
+    // Arrange — fixtures provide all dependencies
+    let token = jwt_auth.generate_token(&test_user.username).unwrap();
+    api_client
+        .set_header("Authorization", &format!("Bearer {}", token))
+        .await
+        .unwrap();
+
+    // Act
+    let response = api_client.get("/api/profile/").await.unwrap();
+
+    // Assert
+    assert_eq!(response.status(), StatusCode::OK);
 }
 ```
 
@@ -172,16 +205,19 @@ fn test_can_edit_permission(#[case] role: &str, #[case] expected: bool) {
 
 ```rust
 #[rstest]
-#[case(StatusCode::OK, "/api/users")]
-#[case(StatusCode::NOT_FOUND, "/api/nonexistent")]
-#[case(StatusCode::METHOD_NOT_ALLOWED, "/api/readonly")]
+#[case(StatusCode::OK, "api:users:list")]
+#[case(StatusCode::NOT_FOUND, "api:nonexistent:list")]
 #[tokio::test]
-async fn test_endpoint_status(#[case] expected: StatusCode, #[case] path: &str) {
-    // Arrange
-    let client = APIClient::new();
+async fn test_endpoint_status(
+    #[case] expected: StatusCode,
+    #[case] route_name: &str,
+    api_client: APIClient,
+) {
+    // Arrange — resolve URL from route name
+    let url = app_router().reverse(route_name, &[]).unwrap_or_default();
 
     // Act
-    let response = client.get(path).await.unwrap();
+    let response = api_client.get(&url).await.unwrap();
 
     // Assert
     assert_eq!(response.status(), expected);

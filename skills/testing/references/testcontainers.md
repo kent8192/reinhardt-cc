@@ -12,209 +12,86 @@ Verify Docker is available:
 docker info | head -5
 ```
 
-## PostgreSQL Container Fixture
+## Using `reinhardt-test` Fixtures (Recommended)
 
-Use `testcontainers::GenericImage` to spin up a PostgreSQL container for integration tests.
+The `reinhardt-test` crate provides pre-built TestContainers fixtures. Use these instead of manually constructing `GenericImage` containers.
 
-```rust
-use rstest::*;
-use std::sync::Arc;
-use testcontainers::{runners::AsyncRunner, GenericImage, ImageExt};
-use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
-
-pub struct TestPool {
-    pub pool: Arc<PgPool>,
-    // Hold the container handle to keep it alive for the test duration
-    _container: testcontainers::ContainerAsync<GenericImage>,
-}
-
-impl TestPool {
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
-    }
-}
-
-#[fixture]
-async fn test_pool() -> TestPool {
-    let container = GenericImage::new("postgres", "16-alpine")
-        .with_exposed_port(5432.into())
-        .with_wait_for(
-            testcontainers::core::WaitFor::message_on_stderr(
-                "database system is ready to accept connections"
-            )
-        )
-        .with_startup_timeout(std::time::Duration::from_secs(30))
-        .with_env_var("POSTGRES_HOST_AUTH_METHOD", "trust")
-        .with_env_var("POSTGRES_DB", "test_db")
-        .with_env_var("POSTGRES_USER", "test_user")
-        .start()
-        .await
-        .expect("Failed to start PostgreSQL container");
-
-    let host_port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("Failed to get mapped port");
-
-    let database_url = format!(
-        "postgres://test_user@127.0.0.1:{}/test_db",
-        host_port
-    );
-
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await
-        .expect("Failed to connect to test database");
-
-    TestPool {
-        pool: Arc::new(pool),
-        _container: container,
-    }
-}
-```
-
-## Table Setup Fixture
-
-Use `reinhardt_query::Query::create_table` with `ColumnDef` to set up test tables.
+### PostgreSQL Container Fixture
 
 ```rust
-use reinhardt_query::{Query, ColumnDef, Table, Iden};
-use sqlx::Executor;
-
-#[derive(Iden)]
-enum Users {
-    Table,
-    Id,
-    Username,
-    Email,
-    IsActive,
-    CreatedAt,
-}
-
-#[fixture]
-async fn test_pool_with_users(#[future] test_pool: TestPool) -> TestPool {
-    let pool = test_pool.await;
-
-    let create_stmt = Query::create_table()
-        .table(Users::Table)
-        .if_not_exists()
-        .col(
-            ColumnDef::new(Users::Id)
-                .big_integer()
-                .auto_increment()
-                .primary_key(),
-        )
-        .col(
-            ColumnDef::new(Users::Username)
-                .string_len(150)
-                .not_null()
-                .unique_key(),
-        )
-        .col(
-            ColumnDef::new(Users::Email)
-                .string_len(254)
-                .not_null(),
-        )
-        .col(
-            ColumnDef::new(Users::IsActive)
-                .boolean()
-                .not_null()
-                .default(true),
-        )
-        .col(
-            ColumnDef::new(Users::CreatedAt)
-                .timestamp_with_time_zone()
-                .not_null()
-                .default(reinhardt_query::Expr::current_timestamp()),
-        )
-        .build_any(&reinhardt_query::PostgresQueryBuilder);
-
-    pool.pool()
-        .execute(sqlx::query(&create_stmt))
-        .await
-        .expect("Failed to create users table");
-
-    pool
-}
-```
-
-## Usage in Tests
-
-```rust
+use reinhardt_test::fixtures::postgres_container;
 use rstest::*;
 use serial_test::serial;
 
 #[rstest]
 #[serial(db)]
 #[tokio::test]
-async fn test_insert_and_query_user(#[future] test_pool_with_users: TestPool) {
-    // Arrange
-    let pool = test_pool_with_users.await;
-    let insert_stmt = Query::insert()
-        .into_table(Users::Table)
-        .columns([Users::Username, Users::Email])
-        .values_panic(["testuser".into(), "test@example.com".into()])
-        .build_any(&reinhardt_query::PostgresQueryBuilder);
-    pool.pool().execute(sqlx::query(&insert_stmt)).await.unwrap();
+async fn test_with_postgres(
+    #[future] postgres_container: (
+        ContainerAsync<GenericImage>,
+        Arc<PgPool>,
+        u16,
+        String,
+    ),
+) {
+    // Arrange — fixture provides container, pool, port, and connection URL
+    let (_container, pool, _port, _url) = postgres_container.await;
+
+    // Act — use pool for database operations
+    sqlx::query("SELECT 1")
+        .execute(pool.as_ref())
+        .await
+        .unwrap();
+}
+```
+
+The `postgres_container` fixture returns a tuple of:
+- `ContainerAsync<GenericImage>` — container handle (keep alive for test duration)
+- `Arc<PgPool>` — connection pool with retry and timeout configuration
+- `u16` — mapped host port
+- `String` — database connection URL
+
+### Shared PostgreSQL (Fast Isolation)
+
+For faster test execution, use the shared database pattern with template databases:
+
+```rust
+use reinhardt_test::fixtures::shared_db_pool;
+use rstest::*;
+
+#[rstest]
+#[tokio::test]
+async fn test_with_shared_db(
+    #[future] shared_db_pool: (PgPool, String),
+) {
+    // Arrange — each test gets an isolated database cloned from template (~10-40ms)
+    let (pool, _url) = shared_db_pool.await;
 
     // Act
-    let row: (String, String) = sqlx::query_as(
-        "SELECT username, email FROM users WHERE username = $1"
-    )
-        .bind("testuser")
-        .fetch_one(pool.pool())
+    let result = sqlx::query("SELECT 1 as value")
+        .fetch_one(&pool)
         .await
         .unwrap();
 
     // Assert
-    assert_eq!(row.0, "testuser");
-    assert_eq!(row.1, "test@example.com");
+    assert_eq!(result.get::<i32, _>("value"), 1);
 }
 ```
 
-## Redis Container Fixture
+### Redis Container Fixture
 
 ```rust
-use testcontainers::{runners::AsyncRunner, GenericImage, ImageExt};
-
-pub struct TestRedis {
-    pub url: String,
-    _container: testcontainers::ContainerAsync<GenericImage>,
-}
-
-#[fixture]
-async fn test_redis() -> TestRedis {
-    let container = GenericImage::new("redis", "7-alpine")
-        .with_exposed_port(6379.into())
-        .with_wait_for(
-            testcontainers::core::WaitFor::message_on_stdout(
-                "Ready to accept connections"
-            )
-        )
-        .with_startup_timeout(std::time::Duration::from_secs(15))
-        .start()
-        .await
-        .expect("Failed to start Redis container");
-
-    let host_port = container
-        .get_host_port_ipv4(6379)
-        .await
-        .expect("Failed to get mapped port");
-
-    TestRedis {
-        url: format!("redis://127.0.0.1:{}", host_port),
-        _container: container,
-    }
-}
+use reinhardt_test::fixtures::redis_container;
+use rstest::*;
 
 #[rstest]
 #[tokio::test]
-async fn test_redis_set_get(#[future] test_redis: TestRedis) {
+async fn test_with_redis(
+    #[future] redis_container: (ContainerAsync<GenericImage>, String),
+) {
     // Arrange
-    let redis = test_redis.await;
-    let client = redis::Client::open(redis.url.as_str()).unwrap();
+    let (_container, url) = redis_container.await;
+    let client = redis::Client::open(url.as_str()).unwrap();
     let mut conn = client.get_multiplexed_async_connection().await.unwrap();
 
     // Act
@@ -235,65 +112,251 @@ async fn test_redis_set_get(#[future] test_redis: TestRedis) {
 }
 ```
 
-## MySQL Container Fixture
+## Table Setup via Migrations (Recommended)
+
+Use the migration system to set up test tables. This ensures your test schema matches production.
+
+### Using `PostgresTableCreator` Fixture
 
 ```rust
-#[fixture]
-async fn test_mysql() -> TestMySql {
-    let container = GenericImage::new("mysql", "8.0")
-        .with_exposed_port(3306.into())
-        .with_wait_for(
-            testcontainers::core::WaitFor::message_on_stderr(
-                "ready for connections"
-            )
-        )
-        .with_startup_timeout(std::time::Duration::from_secs(60))
-        .with_env_var("MYSQL_ROOT_PASSWORD", "test")
-        .with_env_var("MYSQL_DATABASE", "test_db")
-        .start()
+use reinhardt_test::fixtures::postgres_table_creator;
+use reinhardt_testkit::fixtures::schema::{ColumnDefinition, FieldType, Operation};
+use rstest::*;
+
+#[rstest]
+#[tokio::test]
+async fn test_with_table(
+    #[future] postgres_table_creator: PostgresTableCreator,
+) {
+    // Arrange — define schema using Operations API
+    let mut creator = postgres_table_creator.await;
+    let schema = vec![
+        Operation::CreateTable {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id", FieldType::Serial).primary_key(),
+                ColumnDefinition::new("username", FieldType::Varchar(150)),
+                ColumnDefinition::new("email", FieldType::Varchar(254)),
+                ColumnDefinition::new("is_active", FieldType::Boolean),
+            ],
+            constraints: vec![],
+            without_rowid: None,
+            interleave_in_parent: None,
+            partition: None,
+        },
+    ];
+    creator.apply(schema).await.unwrap();
+    let pool = creator.pool();
+
+    // Act — insert and query data
+    sqlx::query("INSERT INTO users (username, email, is_active) VALUES ($1, $2, $3)")
+        .bind("testuser")
+        .bind("test@example.com")
+        .bind(true)
+        .execute(pool)
         .await
-        .expect("Failed to start MySQL container");
+        .unwrap();
 
-    let host_port = container
-        .get_host_port_ipv4(3306)
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
+        .fetch_one(pool)
         .await
-        .expect("Failed to get mapped port");
+        .unwrap();
 
-    let database_url = format!(
-        "mysql://root:test@127.0.0.1:{}/test_db",
-        host_port
-    );
-
-    let pool = sqlx::mysql::MySqlPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await
-        .expect("Failed to connect to test MySQL");
-
-    TestMySql {
-        pool: Arc::new(pool),
-        _container: container,
-    }
+    // Assert
+    assert_eq!(count.0, 1);
 }
 ```
+
+### Using `AdminTableCreator` (Admin Panel Tests)
+
+Combines `PostgresTableCreator` with `AdminDatabase` for admin panel integration tests:
+
+```rust
+use reinhardt_test::fixtures::admin_migrations::AdminTableCreator;
+use rstest::*;
+
+#[rstest]
+#[tokio::test]
+async fn test_admin_operations(
+    #[future] admin_table_creator: AdminTableCreator,
+) {
+    // Arrange
+    let mut creator = admin_table_creator.await;
+    creator.apply(schema).await.unwrap();
+    let admin_db = creator.admin_db();
+
+    // Act — use admin_db for admin panel operations
+    let models = admin_db.list_registered_models();
+
+    // Assert
+    assert!(!models.is_empty());
+}
+```
+
+### Using Migration Executor (Real Migrations)
+
+For testing actual migration files:
+
+```rust
+use reinhardt_test::fixtures::migrations::*;
+use rstest::*;
+
+#[rstest]
+#[tokio::test]
+async fn test_migration_execution(
+    #[future] postgres_container: (ContainerAsync<GenericImage>, Arc<PgPool>, u16, String),
+) {
+    let (_container, pool, _port, _url) = postgres_container.await;
+
+    // Act — run migrations against test database
+    let executor = DatabaseMigrationExecutor::new(pool.as_ref());
+    executor.migrate_app("user").await.unwrap();
+
+    // Assert — verify tables exist after migration
+    let tables = executor.list_tables().await.unwrap();
+    assert!(tables.contains(&"user_users".to_string()));
+}
+```
+
+## Reinhardt Component Integration Tests
+
+Tests should exercise reinhardt components, not just raw SQL:
+
+### ORM Integration Test
+
+```rust
+use reinhardt_test::prelude::*;
+use reinhardt_test::impl_test_model;
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+struct User {
+    id: Uuid,
+    username: String,
+    email: String,
+    is_active: bool,
+}
+
+impl_test_model!(User, Uuid, "users", "auth", non_option_pk);
+
+#[rstest]
+#[serial(db)]
+#[tokio::test]
+async fn test_orm_query(
+    #[future] postgres_table_creator: PostgresTableCreator,
+) {
+    // Arrange
+    let mut creator = postgres_table_creator.await;
+    creator.apply(user_schema()).await.unwrap();
+    let pool = creator.pool();
+
+    // Seed test data
+    sqlx::query("INSERT INTO users (id, username, email, is_active) VALUES ($1, $2, $3, $4)")
+        .bind(Uuid::new_v4())
+        .bind("testuser")
+        .bind("test@example.com")
+        .bind(true)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Act — use reinhardt ORM
+    let found = User::objects()
+        .filter(User::username.eq("testuser"))
+        .get(pool)
+        .await
+        .unwrap();
+
+    // Assert
+    assert_eq!(found.username, "testuser");
+    assert!(found.is_active);
+}
+```
+
+### API View Integration Test
+
+```rust
+use reinhardt_test::prelude::*;
+use reinhardt_test::fixtures::auth::*;
+
+#[rstest]
+#[tokio::test]
+async fn test_user_api_view(
+    api_client: APIClient,
+    test_user: TestUser,
+) {
+    // Arrange
+    let user_json = json!({
+        "id": test_user.id.to_string(),
+        "username": test_user.username,
+    });
+    api_client.force_authenticate(Some(user_json)).await;
+
+    // Act
+    let response = api_client.get("/api/users/").await.unwrap();
+
+    // Assert
+    assert_eq!(response.status(), StatusCode::OK);
+    let users: Vec<UserResponse> = response.json().unwrap();
+    assert!(!users.is_empty());
+}
+```
+
+### Authentication Integration Test
+
+```rust
+use reinhardt_test::fixtures::auth::*;
+
+#[rstest]
+#[tokio::test]
+async fn test_jwt_authentication(
+    api_client: APIClient,
+    jwt_auth: JwtAuth,
+    test_user: TestUser,
+) {
+    // Arrange — generate JWT token using fixture
+    let token = jwt_auth.generate_token(&test_user.username).unwrap();
+    api_client
+        .set_header("Authorization", &format!("Bearer {}", token))
+        .await
+        .unwrap();
+
+    // Act
+    let response = api_client.get("/api/protected/").await.unwrap();
+
+    // Assert
+    assert_eq!(response.status(), StatusCode::OK);
+}
+```
+
+## Environment Configuration
+
+Pool configuration can be tuned via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TEST_MAX_CONNECTIONS` | 5 | Maximum pool connections |
+| `TEST_ACQUIRE_TIMEOUT_SECS` | 60 | Connection acquire timeout |
+| `REDIS_CLUSTER_BASE_PORT` | 17000 | Base port for Redis cluster tests |
 
 ## Cargo.toml Dev-Dependencies
 
 ```toml
 [dev-dependencies]
+reinhardt = { version = "0.1.0-alpha", features = ["test", "testcontainers"] }
 rstest = "0.23"
 serial_test = "3"
-testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "mysql"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
+**Note:** `reinhardt-test` re-exports `testcontainers` types. You do NOT need to add `testcontainers` or `sqlx` as direct dev-dependencies unless you need features beyond what `reinhardt-test` provides.
+
 ## Best Practices
 
-- **Always hold the container handle** (`_container` field) to keep the container alive for the test duration. Dropping the handle stops the container.
-- **Use `#[serial(db)]`** when tests share a database or modify global state.
-- **Set startup timeouts** to avoid flaky tests from slow container pulls.
-- **Use alpine images** (e.g., `postgres:16-alpine`) for faster startup.
-- **Clean up test data** between tests or use separate containers per test for isolation.
-- **Never hardcode ports** — always use `get_host_port_ipv4()` for the dynamically assigned port.
+- **Use `reinhardt-test` fixtures** (`postgres_container`, `shared_db_pool`, `redis_container`) instead of manually constructing containers
+- **Use `#[serial(db)]`** when tests share a database or modify global state
+- **Hold the container handle** — dropping it stops the container
+- **Use `shared_db_pool`** for faster test suites — each test gets an isolated database cloned from a template (~10-40ms per clone vs seconds for a new container)
+- **Use migrations** to set up test schemas when possible, ensuring test and production schemas stay in sync
+- **Use `PostgresTableCreator`** with the Operations API for ad-hoc table creation in tests
+- **Clean up test data** between tests or use separate containers per test for isolation
+- **Never hardcode ports** — the fixtures handle dynamic port assignment automatically
