@@ -1,208 +1,539 @@
 # Reinhardt Serializer Patterns Reference
 
-## ModelSerializer
+## Architecture Overview
 
-`ModelSerializer` automatically generates serialization/deserialization logic from a model definition. It is the recommended approach for standard CRUD endpoints.
+Reinhardt's serializer system follows Django REST Framework's design philosophy with a two-layer architecture:
+
+- **Core Layer (`reinhardt-core`)**: ORM-agnostic traits, field types, validation, arena allocation
+- **REST Layer (`reinhardt-rest`)**: ORM-integrated serializers (`ModelSerializer`, `NestedSerializer`, etc.)
+
+```
+reinhardt-rest::serializers
+  ├── ModelSerializer<M>              (ORM model serialization)
+  ├── HyperlinkedModelSerializer<M>   (HATEOAS URL generation)
+  ├── NestedSerializer<M, R>          (read-only nested relationships)
+  ├── WritableNestedSerializer<M, R>  (writable nested relationships)
+  ├── ListSerializer<M>               (collection serialization)
+  └── SerializerMethodField           (computed fields)
+
+reinhardt-core::serializers
+  ├── Serializer trait                (bidirectional serialization)
+  ├── Deserializer trait              (one-way deserialization)
+  ├── JsonSerializer<T>               (JSON implementation)
+  ├── Field types                     (CharField, IntegerField, etc.)
+  ├── Validation                      (field-level, object-level)
+  ├── SerializationArena              (memory-efficient nested serialization)
+  └── SerializationContext            (depth tracking, circular reference detection)
+```
+
+---
+
+## Core Serializer Trait
+
+The `Serializer` trait is the foundation for all serializers. It defines bidirectional conversion between `Input` and `Output` types.
 
 ```rust
-use reinhardt::rest::prelude::*;
-use crate::apps::user::models::User;
+use reinhardt_core::serializers::{Serializer, SerializerError};
 
-#[derive(ModelSerializer)]
-#[serializer(model = "User")]
-pub struct UserSerializer {
-    #[serializer(read_only)]
-    pub id: i64,
+pub trait Serializer {
+    type Input;
+    type Output;
 
-    #[serializer(max_length = 150)]
-    pub username: String,
-
-    #[serializer(max_length = 254)]
-    pub email: String,
-
-    #[serializer(read_only)]
-    pub created_at: String,
-
-    #[serializer(read_only)]
-    pub is_active: bool,
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError>;
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError>;
 }
 ```
 
-### ModelSerializer Options
+### JsonSerializer (Base Implementation)
 
-| Option | Description |
-|--------|-------------|
-| `model = "ModelName"` | The model this serializer maps to |
-| `fields = [...]` | Explicit list of fields to include |
-| `exclude = [...]` | Fields to exclude from the model |
-| `read_only` | Field is included in output but ignored on input |
-| `write_only` | Field is accepted on input but excluded from output |
-| `required` | Field must be present in input (default for non-Option fields) |
-| `max_length = N` | Maximum string length validation |
-| `min_length = N` | Minimum string length validation |
-| `min_value = N` | Minimum numeric value validation |
-| `max_value = N` | Maximum numeric value validation |
-
-### Build, Serialize, and Deserialize
+For simple serde-based serialization without ORM integration:
 
 ```rust
-// Build a serializer from a model instance
-let user = User::objects().get(id).await?;
-let serializer = UserSerializer::build(&user);
+use reinhardt_core::serializers::{Serializer, JsonSerializer};
+use serde::{Serialize, Deserialize};
 
-// Serialize to JSON-compatible value
-let json_value = serializer.serialize();
+#[derive(Serialize, Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
 
-// Deserialize from request data
-let data: serde_json::Value = request.json().await?;
-let serializer = UserSerializer::deserialize(&data)?;
+let serializer = JsonSerializer::<LoginRequest>::new();
 
-// Validate and save
-let user = serializer.save().await?;
+// Serialize to JSON string
+let json = serializer.serialize(&request)?;
+
+// Deserialize from JSON string
+let request: LoginRequest = serializer.deserialize(&json_str)?;
 ```
+
+**Use when:** Non-model data, simple request/response types, no ORM integration needed.
+
+---
+
+## ModelSerializer
+
+`ModelSerializer<M>` automatically generates serialization logic from ORM models using a builder pattern. It is the recommended approach for standard CRUD endpoints.
+
+```rust
+use reinhardt_rest::serializers::{ModelSerializer, Serializer};
+use reinhardt_rest::serializers::introspection::{FieldIntrospector, FieldInfo};
+
+// Basic usage
+let serializer = ModelSerializer::<User>::new();
+
+// With field configuration (builder pattern)
+let serializer = ModelSerializer::<User>::new()
+    .with_fields(vec!["id".into(), "username".into(), "email".into()])
+    .with_read_only_fields(vec!["id".into()])
+    .with_write_only_fields(vec!["password_hash".into()])
+    .with_exclude(vec!["internal_flag".into()]);
+
+// With field introspector for automatic field discovery
+let mut introspector = FieldIntrospector::new();
+introspector.register_field(FieldInfo::new("id", "Uuid").primary_key());
+introspector.register_field(FieldInfo::new("username", "String"));
+introspector.register_field(FieldInfo::new("email", "String").optional());
+
+let serializer = ModelSerializer::<User>::new()
+    .with_introspector(introspector)
+    .with_read_only_fields(vec!["id".into()]);
+
+// Serialize
+let json_string = serializer.serialize(&user)?;
+
+// Deserialize
+let user: User = serializer.deserialize(&json_string)?;
+
+// Synchronous validation (non-database)
+serializer.validate(&user)?;
+
+// Async validation with database checks (unique constraints)
+serializer.validate_async(&connection, &user).await?;
+```
+
+### ModelSerializer Configuration
+
+| Method | Description |
+|--------|-------------|
+| `.with_fields(Vec<String>)` | Explicit list of fields to include |
+| `.with_exclude(Vec<String>)` | Fields to exclude from the model |
+| `.with_read_only_fields(Vec<String>)` | Fields included in output but ignored on input |
+| `.with_write_only_fields(Vec<String>)` | Fields accepted on input but excluded from output |
+| `.with_introspector(FieldIntrospector)` | Automatic field discovery from model definition |
+| `.with_nested_field(NestedFieldConfig)` | Configure nested relationship serialization |
+| `.with_unique_validator(UniqueValidator)` | Add unique constraint validation |
+| `.with_unique_together_validator(...)` | Add composite unique constraint validation |
+
+### ModelSerializer Query Methods
+
+| Method | Description |
+|--------|-------------|
+| `.field_names()` | Get all configured field names |
+| `.required_fields()` | Get fields that are not optional |
+| `.optional_fields()` | Get fields that are optional |
+| `.primary_key_field()` | Get the primary key field info |
+| `.is_nested_field(name)` | Check if a field is nested |
+| `.meta()` | Access the MetaConfig |
+| `.validators()` | Access the ValidatorConfig |
+
+---
+
+## HyperlinkedModelSerializer
+
+Extends serialization with automatic URL field generation for HATEOAS-style REST APIs.
+
+```rust
+use reinhardt_rest::serializers::{HyperlinkedModelSerializer, UrlReverser, Serializer};
+use std::sync::Arc;
+use std::collections::HashMap;
+
+// Implement UrlReverser for your router
+struct MyUrlReverser;
+impl UrlReverser for MyUrlReverser {
+    fn reverse(&self, name: &str, params: &HashMap<String, String>) -> Result<String, String> {
+        Ok(format!("/api/users/{}/", params.get("id").unwrap()))
+    }
+}
+
+let reverser: Arc<dyn UrlReverser> = Arc::new(MyUrlReverser);
+
+// Create with URL reverser
+let serializer = HyperlinkedModelSerializer::<User>::new("user-detail", Some(reverser));
+
+// Customize URL field name (default: "url")
+let serializer = HyperlinkedModelSerializer::<User>::new("user-detail", None)
+    .url_field_name("self_link");
+
+// Serialized output includes the URL field:
+// {"id": 1, "username": "alice", "url": "/api/users/1/"}
+let json = serializer.serialize(&user)?;
+```
+
+**Use when:** Building HATEOAS/hypermedia-driven APIs where responses include navigable URLs.
+
+---
+
+## NestedSerializer
+
+Embeds related model data inline (read-only). Works with data already loaded by the ORM layer.
+
+```rust
+use reinhardt_rest::serializers::{NestedSerializer, Serializer};
+
+// Basic: serialize a post with its author
+let serializer = NestedSerializer::<Post, Author>::new("author");
+
+// Control nesting depth (default: 1)
+let serializer = NestedSerializer::<Post, Author>::new("author")
+    .depth(2);  // Serialize author and author's nested relationships
+
+// Disable arena allocation (use heap allocation instead)
+let serializer = NestedSerializer::<Post, Author>::new("author")
+    .without_arena();
+
+// Output: {"id": 1, "title": "My Post", "author": {"id": 1, "name": "Alice"}}
+let json = serializer.serialize(&post)?;
+```
+
+**Important:** The ORM layer is responsible for loading related data:
+```rust,ignore
+// 1. Load data with relationships using ORM
+let posts = Post::objects()
+    .select_related("author")
+    .all()
+    .await?;
+
+// 2. Serialize with NestedSerializer (data is already loaded)
+let serializer = NestedSerializer::<Post, Author>::new("author");
+let json = serializer.serialize(&post)?;
+```
+
+### WritableNestedSerializer
+
+Extends `NestedSerializer` with create/update permission control for nested objects.
+
+```rust
+use reinhardt_rest::serializers::WritableNestedSerializer;
+
+// Create with permissions
+let serializer = WritableNestedSerializer::<Post, Comment>::new("comments")
+    .allow_create(true)   // Allow creating nested instances
+    .allow_update(true);  // Allow updating nested instances
+
+// Extract nested data for manual ORM processing
+let nested_data = serializer.extract_nested_data(&json_str)?;
+if let Some(data) = nested_data {
+    // Check if it's a create or update operation
+    if WritableNestedSerializer::<Post, Comment>::is_create_operation(&data) {
+        // Create new related object
+    } else {
+        // Update existing related object
+    }
+}
+```
+
+**Design principle:** The serializer validates JSON structure and permissions; the caller handles database operations within transactions.
+
+### ListSerializer
+
+Serializes collections of model instances.
+
+```rust
+use reinhardt_rest::serializers::{ListSerializer, Serializer};
+
+let serializer = ListSerializer::<User>::new();
+
+let users = vec![user1, user2, user3];
+let json = serializer.serialize(&users)?;
+// Output: [{"id": 1, ...}, {"id": 2, ...}, {"id": 3, ...}]
+```
+
+---
+
+## SerializerMethodField
+
+Adds computed fields that don't correspond to model fields.
+
+```rust
+use reinhardt_rest::serializers::{SerializerMethodField, MethodFieldProvider};
+use reinhardt_rest::serializers::method_field::MethodFieldRegistry;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+
+// Create a method field
+let field = SerializerMethodField::new("full_name");
+
+// With custom method name
+let field = SerializerMethodField::new("full_name")
+    .method_name("compute_full_name");
+
+// Retrieve value from a pre-computed context
+let mut context = HashMap::new();
+context.insert("full_name".to_string(), json!("John Doe"));
+let value = field.get_value(&context)?;
+
+// Use a registry for multiple method fields
+let mut registry = MethodFieldRegistry::new();
+registry.register("full_name", SerializerMethodField::new("full_name"));
+registry.register("post_count", SerializerMethodField::new("post_count"));
+```
+
+**Use when:** Adding derived/computed values (e.g., full name from first + last, post count, formatted dates).
+
+---
 
 ## Serializer Field Types
 
-| Field Type | Rust Type | Validation |
-|------------|-----------|------------|
-| `CharField` | `String` | `max_length`, `min_length`, `blank` |
-| `IntegerField` | `i32` / `i64` | `min_value`, `max_value` |
-| `FloatField` | `f32` / `f64` | `min_value`, `max_value` |
-| `BooleanField` | `bool` | None |
-| `EmailField` | `String` | Email format validation |
-| `URLField` | `String` | URL format validation |
-| `DateField` | `NaiveDate` | ISO 8601 date format |
-| `DateTimeField` | `DateTime<Utc>` | ISO 8601 datetime format |
-| `ChoiceField` | `String` / enum | Validates against allowed choices |
-| `UUIDField` | `Uuid` | UUID format validation |
-| `DecimalField` | `Decimal` | `max_digits`, `decimal_places` |
-| `JSONField` | `serde_json::Value` | Valid JSON |
+Fields from `reinhardt-core` provide validation for individual values.
+
+| Field Type | Validation Options |
+|------------|-------------------|
+| `CharField` | `max_length`, `min_length`, `allow_blank`, `allow_null` |
+| `IntegerField` | `min_value`, `max_value` |
+| `FloatField` | `min_value`, `max_value` |
+| `BooleanField` | `required`, `allow_null` |
+| `EmailField` | Email format validation |
+| `URLField` | URL format validation |
+| `ChoiceField` | Validates against allowed choices list |
+| `DateField` | ISO 8601 date format |
+| `DateTimeField` | ISO 8601 datetime format |
+
+All fields support: `required`, `allow_null`, `default`, and builder pattern configuration.
+
+```rust
+use reinhardt_rest::serializers::{CharField, IntegerField, EmailField};
+
+let username = CharField::new()
+    .max_length(150)
+    .min_length(3)
+    .required(true);
+
+let age = IntegerField::new()
+    .min_value(0)
+    .max_value(200);
+
+let email = EmailField::new()
+    .required(true);
+```
+
+---
 
 ## Relation Fields
 
-| Field Type | Description | Use Case |
-|------------|-------------|----------|
-| `PrimaryKeyRelatedField` | Represents the relation by its primary key | Default for ForeignKey fields |
-| `SlugRelatedField` | Represents the relation by a slug/unique field | Lookup by username, slug, etc. |
-| `HyperlinkedRelatedField` | Represents the relation as a URL | HATEOAS-style APIs |
-| `StringRelatedField` | Represents the relation by its `Display` implementation | Read-only display |
-| `NestedSerializer` | Embeds the full related object (read-only) | Detail views with nested data |
-| `WritableNestedSerializer` | Embeds the full related object (read-write) | Creating/updating nested objects |
-
-### Relation Field Examples
+| Field Type | Representation | Example Output |
+|------------|---------------|----------------|
+| `PrimaryKeyRelatedField<T>` | Primary key | `{"author": 42}` |
+| `SlugRelatedField<T>` | Slug/unique text field | `{"category": "technology"}` |
+| `StringRelatedField<T>` | Display string (read-only) | `{"author": "john_doe"}` |
+| `HyperlinkedRelatedField<T>` | URL | `{"author": "/api/authors/42/"}` |
+| `IdentityField<T>` | Full nested object | `{"profile": {"id": 1, ...}}` |
+| `ManyRelatedField<T>` | Collection of related objects | `{"tags": [1, 2, 3]}` |
 
 ```rust
-#[derive(ModelSerializer)]
-#[serializer(model = "Post")]
-pub struct PostSerializer {
-    #[serializer(read_only)]
-    pub id: i64,
+use reinhardt_rest::serializers::{
+    PrimaryKeyRelatedField, SlugRelatedField,
+    HyperlinkedRelatedField, StringRelatedField,
+    ManyRelatedField, IdentityField,
+};
 
-    pub title: String,
-
-    // ForeignKey as primary key (default)
-    pub author: PrimaryKeyRelatedField<User>,
-
-    // ForeignKey as nested object
-    #[serializer(read_only)]
-    pub author_detail: NestedSerializer<UserSerializer>,
-
-    // ManyToMany as list of primary keys
-    pub tags: Vec<PrimaryKeyRelatedField<Tag>>,
+// Use as struct field types in your model/serializer structs
+struct PostResponse {
+    id: i64,
+    title: String,
+    author: PrimaryKeyRelatedField<User>,      // {"author": 42}
+    category: SlugRelatedField<Category>,       // {"category": "tech"}
+    tags: ManyRelatedField<Tag>,                // {"tags": [1, 2, 3]}
 }
 ```
 
-## Custom Serializer
+---
 
-For non-model serialization or complex validation logic, implement the `Serializer` trait directly:
+## Database Validators
 
 ```rust
-use reinhardt::rest::prelude::*;
+use reinhardt_rest::serializers::{
+    ModelSerializer, UniqueValidator, UniqueTogetherValidator,
+};
 
-pub struct LoginSerializer {
-    pub username: String,
-    pub password: String,
+let serializer = ModelSerializer::<User>::new()
+    .with_unique_validator(UniqueValidator::new("username"))
+    .with_unique_validator(UniqueValidator::new("email"))
+    .with_unique_together_validator(
+        UniqueTogetherValidator::new(vec!["first_name", "last_name"])
+    );
+
+// Async validation checks the database
+serializer.validate_async(&connection, &user).await?;
+```
+
+---
+
+## Meta Configuration
+
+Two approaches for configuring serializer behavior:
+
+### Builder-Based (MetaConfig)
+
+```rust
+use reinhardt_rest::serializers::meta::MetaConfig;
+
+let config = MetaConfig::new()
+    .with_fields(vec!["id".into(), "username".into(), "email".into()])
+    .with_exclude(vec!["password_hash".into()])
+    .with_read_only_fields(vec!["id".into()])
+    .with_write_only_fields(vec!["password".into()]);
+
+config.is_field_included("username"); // true
+config.is_read_only("id");           // true
+config.is_write_only("password");    // true
+```
+
+### Trait-Based (SerializerMeta)
+
+```rust
+use reinhardt_rest::serializers::meta::SerializerMeta;
+
+struct UserSerializerMeta;
+
+impl SerializerMeta for UserSerializerMeta {
+    fn fields() -> Option<Vec<String>> {
+        Some(vec!["id".into(), "username".into(), "email".into()])
+    }
+
+    fn read_only_fields() -> Vec<String> {
+        vec!["id".into()]
+    }
+
+    fn exclude() -> Vec<String> {
+        vec!["password_hash".into()]
+    }
 }
+```
+
+---
+
+## Custom Serializer (Implementing the Trait)
+
+For non-model serialization or complex validation logic:
+
+```rust
+use reinhardt_core::serializers::{Serializer, SerializerError};
+
+struct LoginSerializer;
 
 impl Serializer for LoginSerializer {
-    type Output = LoginData;
+    type Input = LoginRequest;
+    type Output = String;
 
-    fn deserialize(data: &serde_json::Value) -> Result<Self, ValidationError> {
-        let username = data
-            .get("username")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ValidationError::field("username", "This field is required."))?
-            .to_string();
-
-        let password = data
-            .get("password")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ValidationError::field("password", "This field is required."))?
-            .to_string();
-
-        Ok(Self { username, password })
-    }
-
-    fn validate(&self) -> Result<(), ValidationError> {
-        if self.username.is_empty() {
-            return Err(ValidationError::field("username", "Username cannot be empty."));
-        }
-        if self.password.len() < 8 {
-            return Err(ValidationError::field(
-                "password",
-                "Password must be at least 8 characters.",
-            ));
-        }
-        Ok(())
-    }
-
-    fn serialize(&self) -> serde_json::Value {
-        serde_json::json!({
-            "username": self.username,
+    fn serialize(&self, input: &Self::Input) -> Result<Self::Output, SerializerError> {
+        serde_json::to_string(input).map_err(|e| SerializerError::Serde {
+            message: format!("Serialization error: {}", e),
         })
     }
+
+    fn deserialize(&self, output: &Self::Output) -> Result<Self::Input, SerializerError> {
+        let request: LoginRequest = serde_json::from_str(output)
+            .map_err(|e| SerializerError::Serde {
+                message: format!("Deserialization error: {}", e),
+            })?;
+
+        // Custom validation
+        if request.username.is_empty() {
+            return Err(SerializerError::required_field(
+                "username".into(),
+                "This field is required.".into(),
+            ));
+        }
+        if request.password.len() < 8 {
+            return Err(SerializerError::field_validation(
+                "password".into(),
+                request.password.clone(),
+                "min_length".into(),
+                "Password must be at least 8 characters.".into(),
+            ));
+        }
+
+        Ok(request)
+    }
 }
 ```
 
-## Validation Example
+---
 
-Custom field-level and object-level validation:
+## Error Types
 
 ```rust
-#[derive(ModelSerializer)]
-#[serializer(model = "User")]
-pub struct UserCreateSerializer {
-    pub username: String,
-    pub email: String,
+use reinhardt_core::serializers::{SerializerError, ValidatorError};
 
-    #[serializer(write_only, min_length = 8)]
-    pub password: String,
+// SerializerError variants:
+SerializerError::Validation(ValidatorError)  // Validation failure
+SerializerError::Serde { message }           // serde error
+SerializerError::Other { message }           // Generic error
 
-    #[serializer(write_only)]
-    pub password_confirm: String,
-}
+// ValidatorError variants:
+ValidatorError::UniqueViolation { field_name, value, message }
+ValidatorError::UniqueTogetherViolation { field_names, values, message }
+ValidatorError::RequiredField { field_name, message }
+ValidatorError::FieldValidation { field_name, value, constraint, message }
+ValidatorError::DatabaseError { message, source }
+ValidatorError::Custom { message }
 
-impl UserCreateSerializer {
-    /// Object-level validation: ensure passwords match
-    pub fn validate(&self) -> Result<(), ValidationError> {
-        if self.password != self.password_confirm {
-            return Err(ValidationError::non_field(
-                "Passwords do not match.",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Field-level validation: ensure username is not reserved
-    pub fn validate_username(value: &str) -> Result<(), ValidationError> {
-        let reserved = ["admin", "root", "system"];
-        if reserved.contains(&value.to_lowercase().as_str()) {
-            return Err(ValidationError::field(
-                "username",
-                "This username is reserved.",
-            ));
-        }
-        Ok(())
-    }
-}
+// Convenience constructors on SerializerError:
+SerializerError::unique_violation(field, value, msg)
+SerializerError::required_field(field, msg)
+SerializerError::field_validation(field, value, constraint, msg)
+SerializerError::database_error(msg, source)
 ```
+
+---
+
+## Performance Features
+
+```rust
+use reinhardt_rest::serializers::{
+    QueryCache, N1Detector, BatchValidator,
+    PerformanceMetrics, IntrospectionCache,
+};
+use reinhardt_core::serializers::arena::SerializationArena;
+
+// Arena allocation for nested structures (60-90% memory reduction)
+let arena = SerializationArena::new();
+let serialized = arena.serialize_model(&post, depth);
+let json = arena.to_json(serialized);
+
+// N+1 query detection
+let detector = N1Detector::new();
+
+// Query caching
+let cache = QueryCache::new();
+
+// Batch validation for multiple objects
+let validator = BatchValidator::new();
+```
+
+---
+
+## Content Negotiation
+
+```rust
+use reinhardt_rest::serializers::ContentNegotiator;
+
+let negotiator = ContentNegotiator::new();
+// Select parser based on request Content-Type header
+```
+
+---
+
+## Pattern Selection Guide
+
+| Scenario | Recommended Pattern |
+|----------|-------------------|
+| Standard CRUD endpoints | `ModelSerializer` |
+| HATEOAS/hypermedia APIs | `HyperlinkedModelSerializer` |
+| Detail views with nested data | `NestedSerializer` (read-only) |
+| Creating/updating nested objects | `WritableNestedSerializer` |
+| Collection endpoints | `ListSerializer` |
+| Computed/derived fields | `SerializerMethodField` |
+| Non-model data (login, config) | Custom `Serializer` impl or `JsonSerializer` |
+| Simple serde round-trip | `JsonSerializer<T>` |
