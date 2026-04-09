@@ -4,13 +4,14 @@
 
 Reinhardt supports multiple authentication backends, each enabled via feature flags.
 
-| Backend | Feature Flag | Transport | Stateful | Use Case |
-|---------|-------------|-----------|----------|----------|
-| JWT | `auth-jwt` | `Authorization: Bearer <token>` | No | APIs, mobile clients, SPAs |
-| Session | `auth-session` | Cookie (`sessionid`) | Yes | Traditional web apps, admin panel |
-| OAuth 2.0 | `auth-oauth` | `Authorization: Bearer <token>` | Depends | Third-party login (Google, GitHub, etc.) |
-| Token | `auth-token` | `Authorization: Token <key>` | Yes (DB) | Persistent API keys, service accounts |
-| Basic | (always available) | `Authorization: Basic <b64>` | No | Development, simple integrations |
+| Backend | Type | Feature Flag | Transport | Stateful | Use Case |
+|---------|------|-------------|-----------|----------|----------|
+| JWT | `JwtAuth` | `auth-jwt` | `Authorization: Bearer <token>` | No | APIs, mobile clients, SPAs |
+| Session | `SessionAuthentication<B>` | `auth-session` | Cookie (`sessionid`) | Yes | Traditional web apps, admin panel |
+| OAuth 2.0 | `OAuth2Authentication` | `auth-oauth` | `Authorization: Bearer <token>` | Depends | Third-party login (Google, GitHub, etc.) |
+| Token | `TokenAuthentication` | `auth-token` | `Authorization: Token <key>` | Yes (DB) | Persistent API keys, service accounts |
+| Basic | `BasicAuthentication` | (always available) | `Authorization: Basic <b64>` | No | Development, simple integrations |
+| Remote User | `RemoteUserAuthentication` | (always available) | Proxy header | No | Reverse proxy auth (nginx, etc.) |
 
 ## JWT Authentication Setup (Verified Pattern)
 
@@ -147,11 +148,16 @@ async fn session_config(#[inject] settings: Arc<ProjectSettings>) -> SessionConf
 
 ### Session Backends
 
-| Backend | Feature Flag | Storage | Performance | Use Case |
-|---------|-------------|---------|-------------|----------|
-| Database | `sessions` + `db-*` | Database table | Moderate | Default, no extra infrastructure |
-| Redis | `redis-backend` | Redis server | Fast | High-traffic applications |
-| Cookie | `sessions` | Signed cookie | Fastest | Small session data, no server state |
+`SessionAuthentication` is generic over `SessionBackend`. Available implementations:
+
+| Backend | Type | Storage | Performance | Use Case |
+|---------|------|---------|-------------|----------|
+| Database | `DatabaseSessionBackend` | Database table | Moderate | Default, no extra infrastructure |
+| Cache/Redis | `CacheSessionBackend<C>` | Cache (Redis, etc.) | Fast | High-traffic applications |
+| Cookie | `CookieSessionBackend` | Signed cookie | Fastest | Small session data, no server state |
+| JWT | `JwtSessionBackend` | JWT token | Fast | Stateless sessions |
+| File | `FileSessionBackend` | Filesystem | Moderate | Simple deployments |
+| InMemory | `InMemorySessionBackend` | Process memory | Fastest | Development/testing only |
 
 ### Usage in Views
 
