@@ -23,6 +23,8 @@ Claude Code plugin for [reinhardt-web](https://github.com/kent8192/reinhardt-web
 | `api-development` | "create an API", "add a view", "configure routes" | Serializers, views, URL routing, authentication, and pagination following reinhardt REST conventions |
 | `testing` | "write tests", "add test coverage", "test this endpoint" | rstest-based test generation with AAA pattern, reinhardt-test fixtures, and TestContainers integration |
 | `dependency-injection` | "configure DI", "inject a service", "add a provider" | DI container configuration, provider scoping, `#[inject]` handler patterns, and database/auth integration |
+| `configuration` | "settings", "configuration", "config", "TOML", "environment", "profile", "ProjectSettings", "fragment" | Composable settings system using fragments, TOML sources, environment profiles, and the `#[settings]` macro |
+| `admin` | "admin", "admin panel", "ModelAdmin", "AdminSite", "admin interface" | Admin panel setup with `AdminSite` configuration, `#[admin]` macro, ModelAdmin registration, and route mounting |
 | `migration` | "upgrade reinhardt", "migrate", "deprecated", "breaking change", "rc.XX" | Version upgrade analysis via CHANGELOG, deprecated API detection, and guided code migration |
 
 ### Command
