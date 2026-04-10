@@ -600,3 +600,50 @@ DiError::Authentication(String)              // Maps to HTTP 401
 | General function DI | `#[use_inject]` + `#[inject]` |
 | Test mocking (factory) | `ctx.dependency(fn).override_with(value)` |
 | Test mocking (unit) | `Injected::from_value()` / `Depends::from_value()` |
+
+---
+
+## Newtype Pattern for DI Uniqueness
+
+Reinhardt DI uses `TypeId` as the sole registry key — one type maps to exactly one factory. If two factories return the same type, the second silently overwrites the first.
+
+**Always wrap configuration values and generic types in newtype structs:**
+
+```rust
+// BAD: Vec<String> is too generic — will conflict if registered elsewhere
+#[injectable_factory(scope = "singleton")]
+async fn create_allowed_origins() -> Vec<String> {
+    vec!["https://example.com".to_string()]
+}
+
+// GOOD: Newtype gives a unique TypeId
+pub struct AllowedOrigins(pub Vec<String>);
+
+#[injectable_factory(scope = "singleton")]
+async fn create_allowed_origins() -> AllowedOrigins {
+    AllowedOrigins(vec!["https://example.com".to_string()])
+}
+```
+
+### Why This Matters
+
+| Without newtype | With newtype |
+|-----------------|--------------|
+| Silent overwrite on duplicate registration | Compile-time uniqueness guarantee |
+| `Depends<Vec<String>>` — ambiguous intent | `Depends<AllowedOrigins>` — self-documenting |
+| Errors discovered at runtime | Type misuse caught at compile time |
+
+### When to Use Newtypes
+
+- **Primitive wrappers**: `String`, `u32`, `bool` used as configuration values
+- **Generic collections**: `Vec<T>`, `HashMap<K, V>` used as shared state
+- **Common library types**: Types from external crates that multiple factories might produce
+
+### When Newtypes Are NOT Needed
+
+- **Domain-specific structs**: `UserService`, `DatabaseConnection` — already unique types
+- **Types with a single factory**: If only one factory ever produces the type, there is no conflict risk
+
+### Related
+
+- kent8192/reinhardt-web#3457 — duplicate registration detection (runtime enforcement)
