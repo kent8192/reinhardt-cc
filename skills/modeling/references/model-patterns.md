@@ -69,7 +69,7 @@ The `#[field]` attribute accepts these options to configure column behavior:
 | `NaiveTime` | `TIME` | From `chrono` crate |
 | `Vec<u8>` | `BYTEA` / `BLOB` | Binary data |
 | `serde_json::Value` | `JSONB` | Requires `serde_json` |
-| `Uuid` | `UUID` | From `uuid` crate |
+| `Uuid` | `UUID` | From `uuid` crate. `#[model]` generates `Uuid::now_v7()` for `Option<Uuid>` primary keys (time-ordered, better B-tree index performance) |
 | `Decimal` | `NUMERIC` / `DECIMAL` | From `rust_decimal` crate |
 | `Option<T>` | Nullable variant of `T` | Column allows `NULL` |
 
