@@ -25,6 +25,9 @@ Specialized agent for reviewing reinhardt-web application code against project c
 - [ ] Explicit `pub use` re-exports (no `pub use module::*`)
 - [ ] Visibility control: private submodules with public API via `pub use`
 
+### Scaffolding & Naming
+- [ ] Project and app names do not start with `reinhardt_` or `reinhardt-` (reserved namespace)
+
 ### Dependencies
 - [ ] No `reinhardt-test = { workspace = true }` in functional crate `[dev-dependencies]`
 - [ ] Delion plugins depend on `reinhardt` facade, not `reinhardt-dentdelion` directly

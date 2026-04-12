@@ -115,6 +115,8 @@ Users **CANNOT** register `#[injectable_factory]` or `#[injectable]` for types i
 - `reinhardt_auth::`, `reinhardt_db::`, `reinhardt_rest::`
 - All other `reinhardt_*` crate namespaces
 
+The `startproject` and `startapp` commands also reject names starting with `reinhardt_` or `reinhardt-`, because Cargo normalizes hyphens to underscores, placing all types under the reserved `reinhardt_*::*` namespace.
+
 If you need to customize a framework type, wrap it in a newtype:
 
 ```rust
