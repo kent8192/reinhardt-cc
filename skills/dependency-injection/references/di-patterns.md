@@ -62,6 +62,75 @@ async fn create_request_logger(
 - The generated wrapper receives `InjectionContext` and resolves all `#[inject]` dependencies automatically
 - Automatically registers with the global `DependencyRegistry` via `inventory`
 
+### Duplicate Registration Detection
+
+`DependencyRegistry::register()` panics at startup if the same `TypeId` is registered twice. This prevents accidental shadowing of dependencies.
+
+If you need two registrations for the same underlying type, use the **newtype wrapper pattern**:
+
+```rust
+// BAD: registering DatabaseConnection twice panics
+#[injectable_factory(scope = "singleton")]
+async fn create_read_db() -> DatabaseConnection { /* ... */ }
+#[injectable_factory(scope = "singleton")]
+async fn create_write_db() -> DatabaseConnection { /* ... */ }  // PANIC: duplicate TypeId
+
+// GOOD: newtype wrappers create distinct TypeIds
+pub struct ReadDb(pub DatabaseConnection);
+pub struct WriteDb(pub DatabaseConnection);
+
+#[injectable_factory(scope = "singleton")]
+async fn create_read_db() -> ReadDb {
+    ReadDb(DatabaseConnection::connect(&read_url).await.unwrap())
+}
+#[injectable_factory(scope = "singleton")]
+async fn create_write_db() -> WriteDb {
+    WriteDb(DatabaseConnection::connect(&write_url).await.unwrap())
+}
+```
+
+### Registry Validation (`check-di`)
+
+The `RegistryValidator` performs startup sanity checks on the DI registry:
+
+| Check | Description |
+|-------|-------------|
+| Missing dependencies | Detects factories that depend on unregistered types |
+| Scope compatibility | Singletons cannot depend on request-scoped or transient types |
+| Circular dependencies | Static cycle detection (complement to runtime detection) |
+| Framework type overrides | Rejects user registrations for framework-managed types (see Pseudo Orphan Rule) |
+
+Run validation with the CLI:
+
+```bash
+cargo run --bin check-di -- --validate
+```
+
+### Pseudo Orphan Rule
+
+Users **CANNOT** register `#[injectable_factory]` or `#[injectable]` for types in framework namespaces. This prevents accidental override of framework-managed services. Violations cause a startup panic.
+
+**Framework prefixes** (registration panics if the type name starts with any of these):
+- `reinhardt::`, `reinhardt_admin::`, `reinhardt_di::`, `reinhardt_core::`
+- `reinhardt_auth::`, `reinhardt_db::`, `reinhardt_rest::`
+- All other `reinhardt_*` crate namespaces
+
+If you need to customize a framework type, wrap it in a newtype:
+
+```rust
+// BAD: panics at startup — framework type override
+#[injectable_factory(scope = "singleton")]
+async fn custom_auth() -> reinhardt_auth::AuthBackend { /* ... */ }
+
+// GOOD: newtype wrapper
+pub struct CustomAuth(pub reinhardt_auth::AuthBackend);
+
+#[injectable_factory(scope = "singleton")]
+async fn custom_auth() -> CustomAuth {
+    CustomAuth(reinhardt_auth::AuthBackend::new(/* ... */))
+}
+```
+
 ### `#[inject]` Inside Factories
 
 Parameters marked with `#[inject]` are resolved from the `InjectionContext` before the factory body executes. Use `Depends<T>` for injected dependencies:
@@ -120,7 +189,7 @@ pub struct RequestLogger {
 
 - Struct must have named fields
 - All fields must have either `#[inject]` or `#[no_inject]` attribute
-- Struct must be `Clone` (required by `Injectable` trait)
+- `#[injectable]` auto-derives `Clone` if not already present (required by `Injectable` trait)
 - All `#[inject]` field types must implement `Injectable`
 
 ---
@@ -185,7 +254,8 @@ async fn handler(
 | `Injected::<T>::resolve(&ctx)` | Resolve with cache (default) |
 | `Injected::<T>::resolve_uncached(&ctx)` | Resolve without cache |
 | `Injected::from_value(value)` | Create from value (for testing) |
-| `injected.into_inner()` | Extract inner `T` value |
+| `injected.into_inner()` | Extract inner `T` value (requires `T: Clone`) |
+| `injected.try_unwrap()` | Extract inner `T` without `Clone`. Returns `Result<T, Self>` (succeeds when refcount == 1) |
 | `injected.as_arc()` | Get `&Arc<T>` reference |
 | `injected.metadata()` | Get injection metadata (scope, cached) |
 
@@ -202,26 +272,20 @@ Type alias for `Option<Injected<T>>`. Used with `#[inject(optional = true)]`:
 
 ---
 
-## Auto-Injectable Types
+## Registration Requirement
 
-Any type that implements `Default + Clone + Send + Sync + 'static` is automatically injectable without registration. Reinhardt DI creates instances using `Default::default()`.
+All injectable types **MUST** be explicitly registered. There is no auto-injection for `Default` types. Use one of:
 
-```rust
-#[derive(Debug, Clone, Default)]
-pub struct AppConfig {
-    pub debug: bool,
-    pub max_retries: u32,
-}
+| Method | When |
+|--------|------|
+| `#[injectable_factory]` | Async factory with explicit scope (recommended) |
+| `#[injectable]` on struct | Struct with `#[inject]` / `#[no_inject]` field attributes |
+| `#[injectable]` on function | Function that produces the type |
+| `impl Injectable` manually | Custom resolution logic |
 
-// No registration needed — auto-injectable.
-#[get("/config/", name = "show_config")]
-pub async fn show_config(
-    #[inject] config: AppConfig,
-) -> ViewResult<Response> {
-    Ok(Response::new(StatusCode::OK)
-        .with_body(json::to_vec(&json!({ "debug": config.debug }))?))
-}
-```
+Unregistered types return `DiError::DependencyNotRegistered` at runtime.
+
+> **Note:** The `Injectable` trait doc comment in reinhardt-web mentions auto-injection for `Default + Clone` types, but this is not implemented (tracked in kent8192/reinhardt-web#3501).
 
 ---
 
@@ -269,8 +333,8 @@ pub trait Injectable: Sized + Send + Sync + 'static {
 
 | Type | Behavior |
 |------|----------|
-| `Depends<T>` where `T: Injectable + Clone` | Resolves `T` with DI metadata and caching |
-| `Option<T>` where `T: Injectable + Clone` | Returns `Some(T)` on success, `None` on any error |
+| `Depends<T>` where `T: Send + Sync + 'static` | Resolves `T` with DI metadata and caching |
+| `Option<T>` where `T: Injectable` | Returns `Some(T)` on success, `None` on any error |
 
 ---
 
@@ -355,17 +419,18 @@ pub async fn process_order(
 
 When resolving a type `T`:
 
-1. Check override registry (test overrides)
-2. Check request-scoped cache
-3. Check singleton registrations
-4. Check auto-injectable (if `T: Default + Clone + Send + Sync + 'static`)
-5. Return `DiError::NotFound` if none matched
+1. Check global registry for registered scope
+2. If registered: check scope cache (singleton/request) → execute factory on miss
+3. If not registered: check singleton/request caches for pre-seeded values (via `set_singleton()` / `set_request()`)
+4. Return `DiError::DependencyNotRegistered` if none matched
 
 ---
 
 ## `Depends<T>` Wrapping
 
-Singleton services are resolved as `Depends<T>` (internally `Arc<T>` with DI metadata). Factory parameters and handler injection can receive either `Depends<T>` or `T`:
+Singleton services are resolved as `Depends<T>` (internally `Arc<T>` with DI metadata). `Depends<T>` requires only `T: Send + Sync + 'static` — `Clone` is **NOT** required on `T`.
+
+Factory parameters and handler injection can receive either `Depends<T>` or `T`:
 
 ```rust
 // Receives Depends<T> — Arc-wrapped with caching and metadata
@@ -378,6 +443,25 @@ async fn create_user_service(#[inject] config: Depends<AppConfig>) -> UserServic
 #[injectable_factory(scope = "transient")]
 async fn make_handler(#[inject] service: MyService) -> String {
     service.value
+}
+```
+
+### Extracting Values from `Depends<T>` and `Injected<T>`
+
+| Method | Requires `T: Clone` | Behavior |
+|--------|---------------------|----------|
+| `.into_inner()` | Yes | Clones the inner value out of the Arc |
+| `.try_unwrap()` | No | Returns `Ok(T)` if this is the last reference, `Err(Self)` otherwise (mirrors `Arc::try_unwrap`) |
+
+Prefer `try_unwrap()` when the wrapper is the sole owner (e.g., at the end of a request scope) to avoid requiring `Clone` on `T`:
+
+```rust
+#[injectable_factory(scope = "request")]
+async fn create_processor(#[inject] lock: Depends<RwLock<State>>) -> Processor {
+    // RwLock<State> does not implement Clone
+    // try_unwrap() works because the factory is the sole consumer
+    let state_lock = lock.try_unwrap().expect("sole owner");
+    Processor::new(state_lock)
 }
 ```
 
@@ -594,7 +678,7 @@ DiError::Authentication(String)              // Maps to HTTP 401
 |----------|-------------------|
 | Complex async initialization | `#[injectable_factory]` |
 | Struct with injected fields | `#[injectable]` on struct |
-| Simple type with `Default` | Auto-injectable (no registration) |
+| Simple type with `Default` | `#[injectable_factory]` with `Default::default()` body |
 | Custom resolution logic | `impl Injectable` manually |
 | Endpoint DI | `#[inject]` in `#[get]`/`#[post]` etc. |
 | General function DI | `#[use_inject]` + `#[inject]` |

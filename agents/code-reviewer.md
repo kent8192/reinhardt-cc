@@ -35,17 +35,24 @@ Specialized agent for reviewing reinhardt-web application code against project c
 - [ ] Proper relation design (ForeignKey, ManyToMany, OneToOne)
 - [ ] Nullable fields use `Option<T>`
 - [ ] Primary keys defined with `#[field(primary_key = true)]`
+- [ ] UUID primary keys use v7 (auto-handled by `#[model]` — flag any manual `Uuid::new_v4()` calls)
 
 ### Dependency Injection
 - [ ] Appropriate scoping (request-scoped vs singleton)
 - [ ] No circular dependency risk
 - [ ] `#[inject]` used correctly in handlers
+- [ ] No duplicate `TypeId` registrations (use newtype wrappers for same-type multiple registrations)
+- [ ] No `#[injectable]` or `#[injectable_factory]` for framework-managed types (`reinhardt::*`) — use newtype wrapper
+- [ ] Prefer `try_unwrap()` over `into_inner()` for non-Clone types in `Depends<T>` / `Injected<T>`
+- [ ] `cargo run --bin check-di -- --validate` passes
 
 ### API Design
 - [ ] Serializer fields match model fields
 - [ ] Views have appropriate authentication
 - [ ] URL patterns follow RESTful conventions
 - [ ] Error responses are consistent
+- [ ] Route names are unique across the application (duplicates cause startup failure)
+- [ ] Consider `url-resolver` feature for type-safe URL resolution
 
 ### Testing
 - [ ] All tests use `#[rstest]` (not `#[test]`)
