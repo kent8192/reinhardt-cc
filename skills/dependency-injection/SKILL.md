@@ -30,11 +30,11 @@ Guide developers through DI configuration using reinhardt-di, including service 
 
 ## Important Rules
 
-- Types implementing `Default + Clone + Send + Sync + 'static` get auto-injection
+- All injectable types MUST be explicitly registered (`#[injectable_factory]`, `#[injectable]`, or manual `impl Injectable`) — there is no auto-injection for `Default` types
 - Custom injection logic requires `#[async_trait] impl Injectable` (method is `inject`, not `resolve`)
 - Prefer `#[injectable_factory]` for registering dependencies (async, explicit scope, auto-registered)
 - `Injected<T>` is the wrapper type (NOT `Inject<T>` — that type does not exist)
-- Reinhardt DI checks: override registry → request scope → singleton → auto-injectable
+- Reinhardt DI checks: global registry → scope cache → pre-seeded values → `DependencyNotRegistered` error
 - Circular dependencies are detected at runtime and return `Err(DiError::CircularDependency)` — they do NOT panic
 - `#[use_inject]` enables `#[inject]` in general async functions (not just handlers)
 - Test overrides use `ctx.dependency(factory_fn).override_with(value)` for `#[injectable]` functions
