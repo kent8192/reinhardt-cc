@@ -256,3 +256,63 @@ pub fn router() -> ServerRouter {
 | `CompressionMiddleware` | Response compression (gzip, brotli) |
 | `LoggingMiddleware` | Request/response logging |
 | `SecurityHeadersMiddleware` | Adds security headers (CSP, HSTS, X-Frame-Options) |
+
+---
+
+## Type-Safe URL Resolution
+
+> Requires feature flag: `url-resolver`
+
+The `UrlResolver` trait and generated extension traits provide compile-time verified URL resolution, eliminating string-based `reverse()` calls.
+
+### Setup
+
+Enable the feature in `Cargo.toml`:
+
+```toml
+[dependencies]
+reinhardt = { workspace = true, features = ["url-resolver"] }
+```
+
+### Usage
+
+View macros (`#[get]`, `#[post]`, etc.) generate extension traits on `ResolvedUrls` for each named route:
+
+```rust
+use reinhardt::urls::prelude::*;
+
+// Given this view:
+#[get("/users/{id}/", name = "user_detail")]
+pub async fn user_detail(Path(id): Path<i64>) -> ViewResult<Response> { /* ... */ }
+
+// The macro generates a resolution method. Use it like:
+let url = ResolvedUrls::user_detail(42);
+// url == "/users/42/"
+```
+
+### `UrlResolver` Trait
+
+```rust
+pub trait UrlResolver {
+    fn resolve_url(&self, name: &str, params: &[(&str, &str)]) -> String;
+}
+```
+
+For dynamic resolution (when the route name is not known at compile time), use the trait method directly.
+
+---
+
+## Duplicate Route Name Detection
+
+`UrlReverser::register()` returns `Result<(), DuplicateRouteError>` instead of `()`. `ServerRouter::register_all_routes()` collects all errors and reports them at startup. If two routes share the same `name`, the server will fail to start with a clear error message listing the conflicts.
+
+```rust
+// These two routes share the same name — startup will fail
+#[get("/users/", name = "user_list")]
+pub async fn list_users_v1() -> ViewResult<Response> { /* ... */ }
+
+#[get("/api/users/", name = "user_list")]  // ERROR: duplicate name "user_list"
+pub async fn list_users_v2() -> ViewResult<Response> { /* ... */ }
+```
+
+Ensure all route `name` values are unique across the entire application.
