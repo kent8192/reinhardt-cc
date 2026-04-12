@@ -38,6 +38,11 @@ Guide developers through DI configuration using reinhardt-di, including service 
 - Circular dependencies are detected at runtime and return `Err(DiError::CircularDependency)` — they do NOT panic
 - `#[use_inject]` enables `#[inject]` in general async functions (not just handlers)
 - Test overrides use `ctx.dependency(factory_fn).override_with(value)` for `#[injectable]` functions
+- `#[injectable]` auto-derives `Clone` on structs — no need to manually add `#[derive(Clone)]`
+- `Depends<T>` requires only `T: Send + Sync + 'static` (NOT `T: Clone`); `into_inner()` requires Clone, but `try_unwrap()` does not
+- `DependencyRegistry::register()` panics on duplicate `TypeId` — use newtype wrappers for multiple registrations of the same type
+- Users CANNOT register injectables for framework-managed types (`reinhardt::*`, `reinhardt_*::*` namespaces) — wrap in newtypes (pseudo orphan rule)
+- Run `cargo reinhardt check-di --validate` to verify missing deps, scope violations, circular deps, and orphan rule compliance
 
 ## Dynamic References
 
