@@ -11,7 +11,7 @@ Guide developers through the use of reinhardt's procedural macros for models, vi
 
 - User uses or asks about any `#[attribute]` or `derive()` macro
 - User defines models, views, routes, or injectable services
-- User mentions: "macro", "#[model]", "#[user]", "#[inject]", "#[get]", "#[post]", "#[routes]", "#[settings]", "#[admin]", "#[app_config]", "guard!", "installed_apps!", "path!", "#[derive(Schema)]", "#[derive(Model)]", "#[derive(Validate)]", "#[server_fn]", "#[permission_required]", "#[injectable]", "#[use_inject]"
+- User mentions: "macro", "#[model]", "#[user]", "#[inject]", "#[get]", "#[post]", "#[routes]", "#[settings]", "#[admin]", "#[app_config]", "#[hook]", "guard!", "installed_apps!", "path!", "#[derive(Schema)]", "#[derive(Model)]", "#[derive(Validate)]", "#[server_fn]", "#[permission_required]", "#[injectable]", "#[use_inject]"
 
 ## Workflow
 
@@ -38,9 +38,15 @@ Guide developers through the use of reinhardt's procedural macros for models, vi
 ### DI Integration
 
 1. Use `#[inject]` on handler parameters to receive dependencies
-2. Use `#[injectable]` on structs for auto-registration
+2. Use `#[injectable]` on structs for auto-registration (auto-derives `Clone`)
 3. Use `#[injectable_factory]` on async functions for factory-based registration
 4. Use `#[use_inject]` to enable `#[inject]` in non-handler async functions
+
+### Server Hooks
+
+1. Use `#[hook(on = runserver)]` on a unit struct
+2. Implement `RunserverHook` trait with `validate()` and/or `on_server_start()`
+3. Hook is auto-registered via `inventory::collect!`
 
 ## Important Rules
 
@@ -52,7 +58,10 @@ Guide developers through the use of reinhardt's procedural macros for models, vi
 - `installed_apps!` validates app names at compile time
 - `path!` validates URL patterns at compile time (must start with `/`, snake_case params)
 - `#[injectable]` and `#[injectable_factory]` are distinct: struct vs function registration
+- `#[injectable]` auto-derives `Clone` on structs (no need to manually derive)
 - `#[inject(cache = false)]` creates a fresh instance per injection (no caching)
+- `#[hook(on = runserver)]` requires a unit struct (no fields, no generics) implementing `RunserverHook`
+- `#[model]` uses UUID v7 (`Uuid::now_v7()`) for `Option<Uuid>` primary keys — better index performance
 
 ## Cross-Domain References
 

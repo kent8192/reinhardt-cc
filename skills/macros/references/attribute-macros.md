@@ -37,6 +37,8 @@ pub struct Post {
 
 **Auto-derives:** `Model`, `Serialize`, `Deserialize`, `Clone`, `Debug`
 
+**UUID Generation:** For `Option<Uuid>` primary key fields, the `#[model]` macro generates `Uuid::now_v7()` (UUID v7, time-ordered) instead of `Uuid::new_v4()`. UUID v7 provides better B-tree index performance due to temporal ordering.
+
 **Generated:** `Model` trait implementation with `fn objects() -> Manager<Self>`, field accessors, table name derivation.
 
 ### Field Attributes (`#[field(...)]`)
@@ -275,7 +277,7 @@ pub async fn process_data(
 
 **Crate:** `reinhardt-di/macros`
 
-Mark a struct as injectable with automatic DI registration.
+Mark a struct as injectable with automatic DI registration. Auto-derives `Clone` if not already present.
 
 ```rust
 #[injectable]
@@ -285,6 +287,7 @@ pub struct AppConfig {
     pub version: String,
     pub max_items_per_page: usize,
 }
+// Clone is auto-derived — no need for #[derive(Clone)]
 ```
 
 **Associated Attributes:**
@@ -386,6 +389,58 @@ pub async fn edit_user(Path(id): Path<Uuid>) -> ViewResult<Response> {
     // Only users with "users.can_edit" permission
 }
 ```
+
+---
+
+## Server Hooks
+
+### `#[hook(on = runserver)]`
+
+**Crate:** `reinhardt-core/macros`
+
+Define a hook that runs during server startup lifecycle. The hook is auto-registered via `inventory::collect!`.
+
+```rust
+use reinhardt::commands::prelude::*;
+
+#[hook(on = runserver)]
+pub struct MigrationCheck;
+
+#[async_trait]
+impl RunserverHook for MigrationCheck {
+    async fn validate(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        // Called before server starts — validate preconditions
+        check_pending_migrations().await
+    }
+
+    async fn on_server_start(
+        &self,
+        ctx: &RunserverContext,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        // Called after server binds to port
+        log::info!("Server started successfully");
+        Ok(())
+    }
+}
+```
+
+**Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `on` | identifier | Hook lifecycle point. Currently only `runserver` is supported. |
+
+**Requirements:**
+- Must be applied to a **unit struct** (no fields, no generics)
+- Struct must implement `RunserverHook` trait
+- Registered automatically via `inventory::collect!`
+
+**`RunserverHook` trait methods:**
+
+| Method | When Called | Required |
+|--------|------------|----------|
+| `validate(&self)` | Before DI setup and server start | No (default: `Ok(())`) |
+| `on_server_start(&self, ctx: &RunserverContext)` | After server binds to port, DI ready | No (default: `Ok(())`) |
 
 ---
 
