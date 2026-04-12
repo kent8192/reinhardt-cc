@@ -103,7 +103,7 @@ The `RegistryValidator` performs startup sanity checks on the DI registry:
 Run validation with the CLI:
 
 ```bash
-cargo reinhardt check-di --validate
+cargo run --bin check-di -- --validate
 ```
 
 ### Pseudo Orphan Rule

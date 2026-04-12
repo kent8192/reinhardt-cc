@@ -44,7 +44,7 @@ Specialized agent for reviewing reinhardt-web application code against project c
 - [ ] No duplicate `TypeId` registrations (use newtype wrappers for same-type multiple registrations)
 - [ ] No `#[injectable]` or `#[injectable_factory]` for framework-managed types (`reinhardt::*`) — use newtype wrapper
 - [ ] Prefer `try_unwrap()` over `into_inner()` for non-Clone types in `Depends<T>` / `Injected<T>`
-- [ ] `cargo reinhardt check-di --validate` passes
+- [ ] `cargo run --bin check-di -- --validate` passes
 
 ### API Design
 - [ ] Serializer fields match model fields
