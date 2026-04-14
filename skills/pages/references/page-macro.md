@@ -2,26 +2,49 @@
 
 ## Basic Syntax
 
-The `page!` macro creates anonymous components with closure-style DSL:
+The `page!` macro creates anonymous components with closure-style DSL. It returns a closure — invoke it with `()` to get a `Page`:
 
 ```rust
-use reinhardt::pages::prelude::*;
+use reinhardt::pages::component::Page;
+use reinhardt::pages::page;
 
-// No parameters (static view)
-let view = page!(|| {
-    div { "Hello, World!" }
-})();
+// No parameters — note the double call: page!(|| { ... })()
+pub fn hello_page() -> Page {
+    page!(|| {
+        div { "Hello, World!" }
+    })()
+}
 
-// With parameters
-let greeting = page!(|name: String| {
-    div { class: "greeting", { name } }
-});
-let view = greeting("Alice".to_string());
+// With parameters — pass arguments in the second call
+pub fn greeting_page(name: String) -> Page {
+    page!(|name: String| {
+        div { class: "greeting", { name } }
+    })(name)
+}
+```
 
-// With Signal parameters (reactive)
-let counter = page!(|count: Signal<i32>| {
-    div { { format!("Count: {}", count.get()) } }
-});
+### Component Composition (Layout Pattern)
+
+Wrap content in a layout by accepting `Page` as a parameter:
+
+```rust
+pub fn auth_layout(title: &str, form_content: Page) -> Page {
+    let title = title.to_string();
+    page!(|title: String, form_content: Page| {
+        div { class: "min-h-screen flex items-center justify-center bg-gray-50",
+            div { class: "w-full max-w-md",
+                h2 { class: "text-xl font-semibold mb-6", { title } }
+                { form_content }
+            }
+        }
+    })(title, form_content)
+}
+
+// Usage:
+pub fn login_page() -> Page {
+    let form_view = login_form.into_page();
+    auth_layout("Sign in", form_view)
+}
 ```
 
 ## Head Directive (SSR)

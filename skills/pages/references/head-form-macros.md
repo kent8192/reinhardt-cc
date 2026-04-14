@@ -48,19 +48,24 @@ Creates type-safe forms with reactive bindings and validation.
 ### Basic Syntax
 
 ```rust
-use reinhardt::pages::prelude::*;
+use reinhardt::pages::form;
+use reinhardt::pages::component::Page;
 
-let form = form! {
+let login_form = form! {
     name: LoginForm,
-    action: "/api/login",
+    server_fn: login,  // Links to a #[server_fn] function
+    class: "space-y-4",
+    redirect_on_success: "/",
 
     fields: {
         username: CharField { required, label: "Username", max_length: 150 },
-        password: CharField { required, widget: PasswordInput, label: "Password" },
+        password: PasswordField { required, min_length: 8, label: "Password" },
+        submit: SubmitButton { label: "Sign in", class: "btn-primary w-full" },
     },
 };
 
-let view = form.into_view();
+// Convert to Page (NOT .into_view())
+let form_view: Page = login_form.into_page();
 ```
 
 ### Form-Level Attributes
@@ -74,6 +79,7 @@ let view = form.into_view();
 | `class` | String | No | CSS class (default: `"reinhardt-form"`) |
 | `initial_loader` | Path | No | Server function for initial values |
 | `redirect_on_success` | String | No | URL redirect after success |
+| `on_success` | Closure | No | Callback on successful submission |
 
 ### HTTP Methods
 
@@ -176,6 +182,42 @@ form! {
 
 Groups render as `<fieldset>` with optional `<legend>`. Fields are flattened for accessor methods (`form.street()`).
 
+### SubmitButton
+
+Add a submit button as a field:
+
+```rust
+fields: {
+    // ... other fields ...
+    submit: SubmitButton { label: "Submit", class: "btn-primary w-full py-2.5" },
+}
+```
+
+### on_success Callback
+
+Handle successful form submission (e.g., update auth state):
+
+```rust
+form! {
+    name: LoginForm,
+    server_fn: login,
+    redirect_on_success: "/",
+    on_success: |result: AuthResponse| {
+        use reinhardt::pages::auth::{AuthData, auth_state};
+
+        if let Some(ref user) = result.user {
+            auth_state().update(AuthData {
+                is_authenticated: true,
+                username: Some(user.username.clone()),
+                email: Some(user.email.clone()),
+                ..Default::default()
+            });
+        }
+    },
+    fields: { /* ... */ },
+}
+```
+
 ### Validation
 
 #### Server-Side
@@ -209,7 +251,7 @@ Generates RPC stubs for client-server communication. On WASM: HTTP client stub. 
 ### Basic Usage
 
 ```rust
-use reinhardt::pages::prelude::*;
+use reinhardt::pages::server_fn::{ServerFnError, server_fn};
 
 #[server_fn]
 pub async fn get_user(id: u32) -> Result<User, ServerFnError> {
@@ -223,31 +265,63 @@ pub async fn get_user(id: u32) -> Result<User, ServerFnError> {
 let user = get_user(42).await?;
 ```
 
+### Dependency Injection in Server Functions
+
+Use `#[inject]` on parameters to receive DI dependencies (replaces deprecated `use_inject` option):
+
+```rust
+#[server_fn]
+pub async fn login(
+    username: String,
+    password: String,
+    #[inject] http_request: reinhardt::pages::server_fn::ServerFnRequest,
+) -> Result<AuthResponse, ServerFnError> {
+    let user = services::verify_credentials(&username, &password)
+        .await
+        .map_err(|err| ServerFnError::application("Invalid credentials"))?;
+
+    // Set session cookie via ServerFnRequest
+    http_request.add_response_cookie(
+        format!("sessionid={session_id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400")
+    );
+
+    Ok(AuthResponse { success: true, user: Some(user.into()) })
+}
+
+// AuthUser extractor via DI
+#[server_fn]
+pub async fn me(
+    #[inject] reinhardt::AuthUser(user): reinhardt::AuthUser<User>,
+) -> Result<UserInfo, ServerFnError> {
+    Ok(UserInfo::from(&user))
+}
+```
+
 ### Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `endpoint` | String | Auto-generated | Custom endpoint path |
 | `codec` | String | `"json"` | Serialization: `"json"`, `"url"`, `"msgpack"` |
-| `use_inject` | bool | — | **Deprecated** (no-op, emits warning) |
-
-```rust
-#[server_fn(endpoint = "/api/users/get", codec = "msgpack")]
-pub async fn get_user(id: u32) -> Result<User, ServerFnError> {
-    // ...
-}
-```
+| `use_inject` | bool | — | **Deprecated** — use inline `#[inject]` on parameters instead |
 
 ### Error Handling
 
+Use `ServerFnError::application(msg)` for application-level errors. Log internal details with `tracing`, return generic messages to prevent information leakage:
+
 ```rust
+use tracing::error;
+
 #[server_fn]
 pub async fn create_user(name: String) -> Result<User, ServerFnError> {
     if name.is_empty() {
-        return Err(ServerFnError::new("Name cannot be empty"));
+        return Err(ServerFnError::application("Name cannot be empty"));
     }
     let user = User::objects().create_from(&CreateUserData { name }).await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        .map_err(|e| {
+            error!("Failed to create user: {e}");
+            ServerFnError::application("Internal server error")
+        })?;
     Ok(user)
 }
 ```
@@ -261,6 +335,7 @@ let form = form! {
     fields: {
         name: CharField { required, label: "Name" },
         email: EmailField { required, label: "Email" },
+        submit: SubmitButton { label: "Create" },
     },
 };
 ```

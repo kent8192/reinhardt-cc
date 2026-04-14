@@ -6,15 +6,48 @@ Django-style URL patterns with History API integration.
 
 ### Setup
 
-```rust
-use reinhardt::pages::prelude::*;
-use std::sync::Arc;
+Routes take closures that return `Page`:
 
-let router = Arc::new(Router::new()
-    .route("/", home_page)
-    .route("/users/", user_list)
-    .route("/users/{id}/", user_detail)
-    .named_route("user_detail", "/users/{id}/", user_detail));
+```rust
+use reinhardt::pages::router::Router;
+
+fn init_router() -> Router {
+    Router::new()
+        .route("/", || dashboard_page())
+        .route("/login", || login_page())
+        .route("/users/", || user_list_page())
+        .route("/users/{id}/", || user_detail_page())
+        .named_route("user_detail", "/users/{id}/", || user_detail_page())
+        .not_found(|| not_found_page())
+}
+```
+
+### Thread-Local Router (Recommended Pattern)
+
+Store the router in a `thread_local!` for SPA access:
+
+```rust
+use std::cell::RefCell;
+use reinhardt::pages::router::Router;
+
+thread_local! {
+    static ROUTER: RefCell<Option<Router>> = const { RefCell::new(None) };
+}
+
+pub fn init_global_router() {
+    ROUTER.with(|r| {
+        *r.borrow_mut() = Some(init_router());
+    });
+}
+
+pub fn with_router<F, R>(f: F) -> R
+where
+    F: FnOnce(&Router) -> R,
+{
+    ROUTER.with(|r| {
+        f(r.borrow().as_ref().expect("Router not initialized"))
+    })
+}
 ```
 
 ### Components

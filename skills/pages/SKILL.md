@@ -36,7 +36,7 @@ Guide developers through building WASM frontend applications using reinhardt-pag
 
 ## Important Rules
 
-- Import via `use reinhardt::pages::prelude::*` (unified prelude, not individual imports)
+- Prefer explicit imports over prelude (e.g., `use reinhardt::pages::component::Page;`) — see reinhardt-cloud dashboard for the canonical import style
 - Configure `cfg_aliases` in `build.rs` for `wasm`/`native` aliases
 - Event handlers in `page!` are auto-handled across platforms (no manual `#[cfg(wasm)]` needed)
 - Use `watch {}` for reactive conditionals (not static `if` with extracted Signal values)

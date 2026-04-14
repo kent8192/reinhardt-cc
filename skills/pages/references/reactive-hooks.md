@@ -204,9 +204,72 @@ fn handle_click(_event: Event) {
 }
 ```
 
+## Thread-Local State (Recommended Pattern)
+
+For global app state, use `thread_local!` with `RefCell` instead of hooks:
+
+```rust
+use std::cell::RefCell;
+
+pub struct AppState {
+    pub is_loading: bool,
+}
+
+thread_local! {
+    static APP_STATE: RefCell<AppState> = RefCell::new(AppState { is_loading: true });
+}
+
+pub fn with_app_state<F, R>(f: F) -> R
+where
+    F: FnOnce(&AppState) -> R,
+{
+    APP_STATE.with(|s| f(&s.borrow()))
+}
+
+pub fn with_app_state_mut<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut AppState) -> R,
+{
+    APP_STATE.with(|s| f(&mut s.borrow_mut()))
+}
+```
+
+## Auth State (Built-in)
+
+Use the built-in reactive auth state for authentication:
+
+```rust
+use reinhardt::pages::auth::{AuthData, auth_state};
+
+// Update auth state (e.g., after login)
+auth_state().update(AuthData {
+    is_authenticated: true,
+    username: Some("alice".to_string()),
+    email: Some("alice@example.com".to_string()),
+    ..Default::default()
+});
+```
+
+## Effect-Based Reactive Rendering
+
+Use `Effect` to reactively re-render when Signals change:
+
+```rust
+use reinhardt::pages::reactive::Effect;
+
+let path_signal = router::with_router(|r| r.current_path().clone());
+let effect = Effect::new(move || {
+    let path = path_signal.get();  // Subscribe to path changes
+    let page = router::with_router(|r| r.render_current());
+    app_el.set_inner_html(&page.render_to_string());
+});
+std::mem::forget(effect);  // Keep alive for page lifetime
+```
+
 ## Architecture Notes
 
 - **Fine-grained reactivity**: Only DOM nodes depending on changed Signals update (not entire component trees)
 - **Pull-based model**: Signals track dependencies automatically via `.get()` calls
 - **Batching**: Multiple Signal changes batch into a single update cycle via micro-tasks
 - **Memory management**: All reactive nodes auto-cleanup when dropped
+- **`std::mem::forget`**: Use for Effects that should live for the entire page lifetime (e.g., routing)
