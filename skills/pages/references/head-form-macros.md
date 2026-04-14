@@ -27,9 +27,9 @@ let html = my_head.to_html();
 | Element | Attributes | Example |
 |---------|-----------|---------|
 | `title` | Text content | `title { "Page Title" }` |
-| `meta` | `name`, `content`, `property`, `charset` | `meta { name: "description", content: "..." }` |
-| `link` | `rel`, `href`, `type`, `as_` | `link { rel: "stylesheet", href: "..." }` |
-| `script` | `src`, `type`, `defer`, `async_`, text content | `script { src: "...", defer }` |
+| `meta` | `name`, `content`, `property`, `charset`, `http_equiv` | `meta { name: "description", content: "..." }` |
+| `link` | `rel`, `href`, `type`, `as_`, `integrity`, `crossorigin`, `media`, `sizes` | `link { rel: "stylesheet", href: "..." }` |
+| `script` | `src`, `type`, `defer`, `async_`, `integrity`, `crossorigin`, `nonce`, text content | `script { src: "...", defer }` |
 | `style` | Text content | `style { "body { margin: 0; }" }` |
 
 ### Static File Integration

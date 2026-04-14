@@ -79,13 +79,14 @@ let theme: Signal<String> = get_context("theme").unwrap();
 
 | Hook | Signature | Description |
 |------|-----------|-------------|
-| `use_state` | `use_state(\|\| T) -> (Signal<T>, SetState<T>)` | Local reactive state |
+| `use_state` | `use_state(initial: T) -> (Signal<T>, SetState<T>)` | Local reactive state (takes value, not closure) |
 | `use_reducer` | `use_reducer(reducer, init) -> (Signal<S>, Dispatch<A>)` | State with reducer pattern |
-| `use_shared_state` | `use_shared_state::<T>(key) -> SharedSignal<T>` | Shared state across components |
-| `use_optimistic` | `use_optimistic(signal) -> OptimisticState<T>` | Optimistic UI updates |
+| `use_shared_state` | `use_shared_state(initial: T) -> (SharedSignal<T>, SharedSetState<T>)` | Shared state across components |
+| `use_optimistic` | `use_optimistic(initial: T) -> OptimisticState<T>` | Optimistic UI updates |
 
 ```rust
-let (count, set_count) = use_state(|| 0);
+// use_state takes a value directly (NOT a closure)
+let (count, set_count) = use_state(0);
 set_count(5);
 ```
 
@@ -95,7 +96,8 @@ set_count(5);
 |------|-----------|-------------|
 | `use_effect` | `use_effect(closure)` | Side effect (async-safe) |
 | `use_layout_effect` | `use_layout_effect(closure)` | Synchronous effect before paint |
-| `use_effect_event` | `use_effect_event(closure)` | Event handler that reads latest values |
+| `use_effect_event` | `use_effect_event(closure) -> Callback<EventArg, ()>` | Event handler that reads latest values |
+| `use_effect_event_with` | `use_effect_event_with(closure) -> Callback<Args, Ret>` | Generic event handler variant |
 
 ```rust
 use_effect(move || {
@@ -112,7 +114,8 @@ use_effect(move || {
 | Hook | Signature | Description |
 |------|-----------|-------------|
 | `use_memo` | `use_memo(closure) -> Memo<T>` | Cached computation |
-| `use_callback` | `use_callback(closure) -> Callback<A, R>` | Stable callback reference |
+| `use_callback` | `use_callback(closure) -> Callback<EventArg, ()>` | Stable event callback |
+| `use_callback_with` | `use_callback_with(closure) -> Callback<Args, Ret>` | Generic stable callback |
 | `use_deferred_value` | `use_deferred_value(signal) -> Signal<T>` | Deferred update for low-priority UI |
 
 ### Ref and Identity Hooks
@@ -121,13 +124,14 @@ use_effect(move || {
 |------|-----------|-------------|
 | `use_ref` | `use_ref(init) -> Ref<T>` | Mutable reference (no re-render on change) |
 | `use_id` | `use_id() -> String` | Unique ID for accessibility |
+| `use_id_with_prefix` | `use_id_with_prefix(prefix) -> String` | Unique ID with custom prefix |
 
 ### Async Hooks
 
 | Hook | Signature | Description |
 |------|-----------|-------------|
 | `use_transition` | `use_transition() -> TransitionState` | Non-blocking state updates |
-| `use_action` | `use_action(action_fn) -> Action<I, O>` | Async action with loading/error state |
+| `use_action` | `use_action(action_fn) -> Action<T, E>` | Async action with loading/error state |
 | `use_action_state` | *(deprecated)* | Use `use_action` instead |
 
 ```rust
@@ -151,8 +155,9 @@ match save_action.phase().get() {
 | Hook | Signature | Description |
 |------|-----------|-------------|
 | `use_sync_external_store` | `use_sync_external_store(subscribe, get_snapshot)` | Integrate external stores |
-| `use_websocket` | `use_websocket(url, options) -> WebSocket` | Reactive WebSocket |
-| `use_context` | `use_context::<T>(key) -> T` | Read context value |
+| `use_sync_external_store_with_server` | `...(subscribe, get_snapshot, get_server_snapshot)` | SSR-compatible variant |
+| `use_websocket` | `use_websocket(url, options) -> WebSocketHandle` | Reactive WebSocket |
+| `use_context` | `use_context(ctx: &Context<T>) -> Option<T>` | Read context value (takes `&Context<T>`, returns `Option`) |
 
 ### Debug Hooks
 

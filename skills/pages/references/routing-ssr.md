@@ -19,13 +19,13 @@ let router = Arc::new(Router::new()
 
 ### Components
 
-| Component | Description |
-|-----------|-------------|
-| `Router` | Route registry with pattern matching |
-| `Route` | Single route definition |
-| `Link` | Client-side navigation (no full page reload) |
-| `RouterOutlet` | Renders the current matched route |
-| `Redirect` | Programmatic redirect component |
+| Component | Description | Import |
+|-----------|-------------|--------|
+| `Router` | Route registry with pattern matching | prelude |
+| `Route` | Single route definition | prelude |
+| `Link` | Client-side navigation (no full page reload) | prelude |
+| `RouterOutlet` | Renders the current matched route | prelude |
+| `Redirect` | Programmatic redirect component | `reinhardt::pages::router::Redirect` |
 
 ### RouterOutlet
 
@@ -40,8 +40,8 @@ let outlet = RouterOutlet::new(router.clone());
 // In page! macro
 Link(to: "/users/42/") { "View User" }
 
-// With named route
-Link(to: router.reverse("user_detail", &[("id", "42")])) { "View User" }
+// With named route (reverse returns Result)
+Link(to: router.reverse("user_detail", &[("id", "42")]).unwrap()) { "View User" }
 ```
 
 ### Programmatic Navigation
@@ -52,11 +52,14 @@ router.push("/users/42/");
 
 ### Route Parameters
 
-```rust
-use reinhardt::pages::router::{PathParams, FromPath};
+Use `PathParams<T>` as an extractor with destructuring:
 
-fn user_detail(params: PathParams) -> Page {
-    let id: i64 = params.get("id").unwrap();
+```rust
+use reinhardt::pages::router::PathParams;
+
+// PathParams<T> is a generic wrapper — destructure in the function signature
+fn user_detail(PathParams(id): PathParams<i64>) -> Page {
+    // id is i64, extracted from the URL
     // ...
 }
 ```
@@ -72,15 +75,18 @@ let protected_route = guard(is_authenticated, "/login");
 
 ### PathPattern
 
-Django-style URL patterns with compile-time validation:
+Django-style URL patterns:
 
 ```rust
 use reinhardt::pages::prelude::PathPattern;
 
 let pattern = PathPattern::new("/users/{id}/posts/{post_id}/");
-let matched = pattern.match_path("/users/42/posts/7/");
-// matched.get("id") == Some("42")
-// matched.get("post_id") == Some("7")
+
+// matches() returns Option<(HashMap<String, String>, Vec<String>)>
+if let Some((params, _)) = pattern.matches("/users/42/posts/7/") {
+    // params.get("id") == Some(&"42".to_string())
+    // params.get("post_id") == Some(&"7".to_string())
+}
 ```
 
 ## Server-Side Rendering (SSR)
@@ -97,12 +103,9 @@ let html = SsrRenderer::render(&my_component);
 let html = SsrRenderer::with_options(SsrOptions::default())
     .render(&my_component);
 
-// Full page rendering (includes head, layout)
-let page = SsrRenderer::render_page(
-    &my_component,
-    "My Page Title",
-    Some("<!DOCTYPE html>..."),
-);
+// Full page rendering (takes component only)
+let mut renderer = SsrRenderer::with_options(SsrOptions::default());
+let page_html = renderer.render_page(&my_component);
 ```
 
 ### Head Section in SSR
@@ -146,15 +149,6 @@ if is_hydration_complete() {
 on_hydration_complete(|| {
     log!("Hydration complete");
 });
-```
-
-### HydrationContext
-
-```rust
-use reinhardt::pages::prelude::HydrationContext;
-
-// Access hydration context for state restoration
-let ctx = HydrationContext::current();
 ```
 
 ### Island Hydration

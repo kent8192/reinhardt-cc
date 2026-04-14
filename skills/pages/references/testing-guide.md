@@ -60,7 +60,9 @@ use reinhardt_pages::testing::e2e;
 
 ## Mock Utilities
 
-### mock_server_fn
+> **Deprecation Notice**: `mock_server_fn`, `mock_server_fn_error`, and `mock_server_fn_custom` are deprecated since v0.1.0-rc.16. Use `MockServiceWorker` from `reinhardt_test::msw` instead. The examples below still work but will emit deprecation warnings.
+
+### mock_server_fn (deprecated)
 
 ```rust
 use reinhardt_pages::testing::*;
@@ -68,14 +70,14 @@ use reinhardt_pages::testing::*;
 // Mock a successful response
 mock_server_fn("/api/server_fn/get_user", &user_data);
 
-// Mock an error response
-mock_server_fn_error("/api/server_fn/get_user", "Not found");
+// Mock an error response (requires status code)
+mock_server_fn_error("/api/server_fn/get_user", 404, "Not found");
 
 // Mock with custom response
 mock_server_fn_custom("/api/server_fn/get_user", MockResponse {
     status: 200,
     body: serde_json::to_string(&data).unwrap(),
-    headers: vec![],
+    headers: std::collections::HashMap::new(),
 });
 ```
 
