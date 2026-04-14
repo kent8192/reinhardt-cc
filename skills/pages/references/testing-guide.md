@@ -7,7 +7,7 @@
 Direct testing of server functions without HTTP overhead.
 
 ```rust
-use reinhardt_pages::testing::ServerFnTestContext;
+use reinhardt::pages::testing::ServerFnTestContext;
 
 #[tokio::test]
 async fn test_get_user() {
@@ -30,8 +30,8 @@ async fn test_get_user() {
 Test WASM components with MSW-style mocked HTTP responses. MockServiceWorker intercepts `window.fetch` at the WASM level.
 
 ```rust
-use reinhardt_test::msw::{MockServiceWorker, MockResponse, rest};
-use reinhardt_test::fixtures::wasm::msw::msw_worker;
+use reinhardt::test::msw::{MockServiceWorker, MockResponse, rest};
+use reinhardt::test::fixtures::wasm::msw::msw_worker;
 use wasm_bindgen_test::*;
 use rstest::*;
 
@@ -58,7 +58,7 @@ async fn test_user_list_component(#[future] msw_worker: MockServiceWorker) {
 Full integration tests with real server and WASM frontend.
 
 ```rust
-use reinhardt_pages::testing::e2e;
+use reinhardt::pages::testing::e2e;
 ```
 
 ## MockServiceWorker API
@@ -66,7 +66,7 @@ use reinhardt_pages::testing::e2e;
 ### Setup & Lifecycle
 
 ```rust
-use reinhardt_test::msw::{MockServiceWorker, UnhandledPolicy};
+use reinhardt::test::msw::{MockServiceWorker, UnhandledPolicy};
 
 // Default: unhandled requests cause errors
 let worker = MockServiceWorker::new();
@@ -100,7 +100,7 @@ worker.reset_handlers();
 ### REST Handlers
 
 ```rust
-use reinhardt_test::msw::{rest, MockResponse};
+use reinhardt::test::msw::{rest, MockResponse};
 
 // Fixed response
 worker.handle(rest::get("/api/users").respond(MockResponse::json(&users)));
@@ -128,7 +128,7 @@ worker.handle(rest::get("/api/fail").network_error());
 ### MockResponse
 
 ```rust
-use reinhardt_test::msw::MockResponse;
+use reinhardt::test::msw::MockResponse;
 
 MockResponse::json(&data)            // Status 200, content-type: application/json
 MockResponse::text("hello")          // Status 200, content-type: text/plain
@@ -146,7 +146,7 @@ worker.handle_server_fn::<login::marker>(|args| {
 });
 
 // With DI context
-use reinhardt_test::msw::TestContext;
+use reinhardt::test::msw::TestContext;
 
 let ctx = TestContext::new()
     .insert(MockDb { users: vec!["alice".into()] });
@@ -183,7 +183,7 @@ let all = worker.all_calls(); // -> Vec<RecordedRequest>
 ### rstest Fixtures
 
 ```rust
-use reinhardt_test::fixtures::wasm::msw::{msw_worker, msw_worker_passthrough};
+use reinhardt::test::fixtures::wasm::msw::{msw_worker, msw_worker_passthrough};
 
 // Auto-started with UnhandledPolicy::Error
 #[rstest]
@@ -212,9 +212,10 @@ async fn test_lenient(#[future] msw_worker_passthrough: MockServiceWorker) {
 
 ```toml
 # Cargo.toml
+[dependencies]
+reinhardt = { workspace = true, features = ["pages", "test", "msw"] }
+
 [dev-dependencies]
-reinhardt-pages = { workspace = true, features = ["testing", "msw"] }
-reinhardt-test = { workspace = true, features = ["msw"] }
 wasm-bindgen-test = "0.3"
 ```
 
