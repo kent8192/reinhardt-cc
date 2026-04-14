@@ -4,19 +4,27 @@
 
 ### ApiModel
 
-Derive `ApiModel` to connect a struct to a REST endpoint:
+Implement the `ApiModel` trait to connect a struct to a REST endpoint:
 
 ```rust
-use reinhardt::pages::prelude::*;
+use reinhardt::pages::api::{ApiModel, ApiQuerySet};
+use serde::{Deserialize, Serialize};
 
-#[derive(ApiModel)]
-#[api(endpoint = "/api/users/")]
+#[derive(Debug, Serialize, Deserialize)]
 struct User {
     id: i64,
     username: String,
     email: String,
 }
+
+impl ApiModel for User {
+    fn endpoint() -> &'static str {
+        "/api/users/"
+    }
+}
 ```
+
+`ApiModel` is a trait (not a derive macro). It requires `Serialize + DeserializeOwned` and one method: `fn endpoint() -> &'static str`. This enables `User::objects()` to return an `ApiQuerySet<User>`.
 
 ### ApiQuerySet
 
