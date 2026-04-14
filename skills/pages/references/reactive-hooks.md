@@ -266,6 +266,56 @@ let effect = Effect::new(move || {
 std::mem::forget(effect);  // Keep alive for page lifetime
 ```
 
+## watch Blocks vs Hooks
+
+The `page!` macro's `watch` block provides **reactive rendering** that automatically re-renders when Signal dependencies change. This is distinct from hooks.
+
+### When to Use watch (Not Hooks)
+
+| Scenario | Use | Not |
+|----------|-----|-----|
+| Conditionally show/hide elements based on Signal | `watch { if signal.get() { ... } }` | `use_effect` |
+| Render different views based on state | `watch { match state.get() { ... } }` | `use_effect` + manual DOM |
+| Reactive list rendering | `watch { for item in items.get() { ... } }` | `use_effect` |
+
+### When Hooks Are Still Needed
+
+| Scenario | Use |
+|----------|-----|
+| Side effects (API calls, logging, subscriptions) | `use_effect` |
+| Expensive cached computations | `use_memo` |
+| Async actions with loading/error state | `use_action` |
+| State management | `use_state`, `use_reducer` |
+| DOM refs and measurements | `use_ref`, `use_layout_effect` |
+
+### Example: watch Replaces Manual Effect Rendering
+
+```rust
+// AVOID: using Effect for conditional rendering
+let (show, _) = use_state(Signal::new(false));
+use_effect(move || {
+    if show.get() { /* manually update DOM */ }
+});
+
+// PREFER: watch block in page! macro
+page!(|show: Signal<bool>| {
+    div {
+        watch {
+            if show.get() {
+                div { class: "alert", "Visible!" }
+            }
+        }
+    }
+})(show)
+```
+
+### watch Best Practices
+
+- **Pass Signals directly** to `page!` — don't extract values before the macro
+- **Clone Signals freely** — `Signal::clone()` is cheap (Rc-based)
+- **One expression per watch** — each block must contain exactly one `if`, `match`, or `for`
+- **Don't nest watch blocks** — use multiple sibling watch blocks instead
+
 ## Architecture Notes
 
 - **Fine-grained reactivity**: Only DOM nodes depending on changed Signals update (not entire component trees)
@@ -273,3 +323,4 @@ std::mem::forget(effect);  // Keep alive for page lifetime
 - **Batching**: Multiple Signal changes batch into a single update cycle via micro-tasks
 - **Memory management**: All reactive nodes auto-cleanup when dropped
 - **`std::mem::forget`**: Use for Effects that should live for the entire page lifetime (e.g., routing)
+- **watch compiles to `Page::reactive()`**: The reactive closure is tracked by the runtime and re-evaluated on Signal changes

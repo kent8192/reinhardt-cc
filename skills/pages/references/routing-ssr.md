@@ -34,53 +34,92 @@ thread_local! {
     static ROUTER: RefCell<Option<Router>> = const { RefCell::new(None) };
 }
 
+/// Initialize the global router instance. Must be called once at startup.
 pub fn init_global_router() {
     ROUTER.with(|r| {
         *r.borrow_mut() = Some(init_router());
     });
 }
 
+/// Access the global router within a closure.
+///
+/// # Panics
+///
+/// Panics if `init_global_router` has not been called.
 pub fn with_router<F, R>(f: F) -> R
 where
     F: FnOnce(&Router) -> R,
 {
     ROUTER.with(|r| {
-        f(r.borrow().as_ref().expect("Router not initialized"))
+        f(r.borrow()
+            .as_ref()
+            .expect("Router not initialized. Call init_global_router() first."))
     })
 }
 ```
 
-### Components
+### SPA Navigation
 
-| Component | Description | Import |
-|-----------|-------------|--------|
-| `Router` | Route registry with pattern matching | prelude |
-| `Route` | Single route definition | prelude |
-| `Link` | Client-side navigation (no full page reload) | prelude |
-| `RouterOutlet` | Renders the current matched route | prelude |
-| `Redirect` | Programmatic redirect component | `reinhardt::pages::router::Redirect` |
-
-### RouterOutlet
+Use standard HTML `<a>` tags with `href` in `page!` macro. SPA link interception is set up separately to avoid full page reloads:
 
 ```rust
-let outlet = RouterOutlet::new(router.clone());
-// Renders the component matching the current URL
+// In page! macro — use standard <a> tags
+page!(|| {
+    nav {
+        a { href: "/", class: "nav-link", "Overview" }
+        a { href: "/users/", class: "nav-link", "Users" }
+        a { href: "/login", class: "nav-link", "Login" }
+    }
+})()
 ```
 
-### Link Component
+#### SPA Link Interception (Required for Client-Side Navigation)
+
+Set up a global click handler to intercept internal links and use `router.push()` instead of full page reloads:
 
 ```rust
-// In page! macro
-Link(to: "/users/42/") { "View User" }
+fn setup_link_interception(document: &web_sys::Document) {
+    let closure = Closure::wrap(Box::new(move |event: web_sys::MouseEvent| {
+        // Walk DOM to find enclosing <a> tag
+        let target = event.target().unwrap();
+        let mut el = target.dyn_into::<web_sys::Element>().ok();
+        while let Some(element) = el {
+            if element.tag_name() == "A" {
+                if let Some(href) = element.get_attribute("href") {
+                    // Only intercept internal links (starting with "/")
+                    if href.starts_with('/') {
+                        event.prevent_default();
+                        router::with_router(|r| {
+                            let _ = r.push(&href);
+                        });
+                    }
+                }
+                return;
+            }
+            el = element.parent_element();
+        }
+    }) as Box<dyn FnMut(_)>);
 
-// With named route (reverse returns Result)
-Link(to: router.reverse("user_detail", &[("id", "42")]).unwrap()) { "View User" }
+    document
+        .add_event_listener_with_callback("click", closure.as_ref().unchecked_ref())
+        .expect("failed to add click listener");
+    closure.forget();
+}
 ```
 
-### Programmatic Navigation
+#### Programmatic Navigation
 
 ```rust
-router.push("/users/42/");
+router::with_router(|r| {
+    let _ = r.push("/users/42/");
+});
+```
+
+### Named Routes (Reverse URL)
+
+```rust
+// reverse() returns Result — handle the error
+let url = router.reverse("user_detail", &[("id", "42")]).unwrap();
 ```
 
 ### Route Parameters
@@ -119,6 +158,45 @@ let pattern = PathPattern::new("/users/{id}/posts/{post_id}/");
 if let Some((params, _)) = pattern.matches("/users/42/posts/7/") {
     // params.get("id") == Some(&"42".to_string())
     // params.get("post_id") == Some(&"7".to_string())
+}
+```
+
+## WASM Entry Point (Recommended Pattern)
+
+The recommended SPA setup pattern combines router initialization, link interception, and reactive rendering:
+
+```rust
+use wasm_bindgen::prelude::*;
+use reinhardt::pages::reactive::Effect;
+
+#[wasm_bindgen(start)]
+pub fn main() -> Result<(), JsValue> {
+    console_error_panic_hook::set_once();
+    state::init_app_state();
+
+    // Initialize the SPA router and register browser history listener
+    router::init_global_router();
+    router::with_router(|r| r.setup_history_listener());
+
+    let window = web_sys::window().expect("no global window");
+    let document = window.document().expect("no document");
+
+    // Set up global click handler for SPA link interception
+    setup_link_interception(&document);
+
+    // Set up reactive rendering — re-renders #app when route changes
+    let path_signal = router::with_router(|r| r.current_path().clone());
+    let doc = document.clone();
+    let effect = Effect::new(move || {
+        let _path = path_signal.get(); // Subscribe to path changes
+        let app = doc.get_element_by_id("app").expect("no #app element");
+        let page = router::with_router(|r| r.render_current());
+        app.set_inner_html(&page.render_to_string());
+    });
+    // Keep the effect alive for the lifetime of the page
+    std::mem::forget(effect);
+
+    Ok(())
 }
 ```
 

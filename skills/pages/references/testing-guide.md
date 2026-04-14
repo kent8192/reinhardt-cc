@@ -25,28 +25,31 @@ async fn test_get_user() {
 }
 ```
 
-### Layer 2: WASM Component Tests with Mocked HTTP
+### Layer 2: WASM Component Tests with MockServiceWorker
 
-Test WASM components with mocked server function responses.
+Test WASM components with MSW-style mocked HTTP responses. MockServiceWorker intercepts `window.fetch` at the WASM level.
 
 ```rust
-use reinhardt_pages::testing::{mock_server_fn, clear_mocks, assert_server_fn_called};
+use reinhardt_test::msw::{MockServiceWorker, MockResponse, rest};
+use reinhardt_test::fixtures::wasm::msw::msw_worker;
 use wasm_bindgen_test::*;
+use rstest::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
+#[rstest]
 #[wasm_bindgen_test]
-async fn test_user_list_component() {
+async fn test_user_list_component(#[future] msw_worker: MockServiceWorker) {
     // Arrange
+    let worker = msw_worker.await;
     let users = vec![User { id: 1, username: "alice".into() }];
-    mock_server_fn("/api/server_fn/get_users", &users);
+    worker.handle(rest::get("/api/users").respond(MockResponse::json(&users)));
 
     // Act: render component
     // ...
 
     // Assert
-    assert_server_fn_called("/api/server_fn/get_users");
-    clear_mocks();
+    worker.calls_to("/api/users").assert_called();
 }
 ```
 
@@ -58,89 +61,178 @@ Full integration tests with real server and WASM frontend.
 use reinhardt_pages::testing::e2e;
 ```
 
-## Mock Utilities
+## MockServiceWorker API
 
-> **Deprecation Notice**: `mock_server_fn`, `mock_server_fn_error`, and `mock_server_fn_custom` are deprecated since v0.1.0-rc.16. Use `MockServiceWorker` from `reinhardt_test::msw` instead. The examples below still work but will emit deprecation warnings.
-
-### mock_server_fn (deprecated)
+### Setup & Lifecycle
 
 ```rust
-use reinhardt_pages::testing::*;
+use reinhardt_test::msw::{MockServiceWorker, UnhandledPolicy};
 
-// Mock a successful response
-mock_server_fn("/api/server_fn/get_user", &user_data);
+// Default: unhandled requests cause errors
+let worker = MockServiceWorker::new();
 
-// Mock an error response (requires status code)
-mock_server_fn_error("/api/server_fn/get_user", 404, "Not found");
+// Or: unhandled requests pass through to real fetch
+let worker = MockServiceWorker::with_policy(UnhandledPolicy::Passthrough);
 
-// Mock with custom response
-mock_server_fn_custom("/api/server_fn/get_user", MockResponse {
-    status: 200,
-    body: serde_json::to_string(&data).unwrap(),
-    headers: std::collections::HashMap::new(),
+// Start intercepting (overrides window.fetch)
+worker.start().await;
+
+// Stop intercepting (restores original window.fetch)
+worker.stop().await;
+
+// Clear handlers and recorded requests
+worker.reset();
+
+// Clear handlers only, keep recordings
+worker.reset_handlers();
+
+// Drop impl auto-restores fetch
+```
+
+### UnhandledPolicy
+
+| Policy | Description |
+|--------|-------------|
+| `UnhandledPolicy::Error` | Default — rejected Promise with TypeError |
+| `UnhandledPolicy::Passthrough` | Delegates to original `window.fetch` |
+| `UnhandledPolicy::Warn` | `console.warn` + passthrough |
+
+### REST Handlers
+
+```rust
+use reinhardt_test::msw::{rest, MockResponse};
+
+// Fixed response
+worker.handle(rest::get("/api/users").respond(MockResponse::json(&users)));
+worker.handle(rest::post("/api/users").respond(MockResponse::json(&new_user)));
+worker.handle(rest::put("/api/users/:id").respond(MockResponse::empty()));
+worker.handle(rest::delete("/api/users/:id").respond(MockResponse::empty().with_status(204)));
+worker.handle(rest::patch("/api/users/:id").respond(MockResponse::json(&updated)));
+
+// Dynamic response
+worker.handle(rest::get("/api/users/:id").respond_with(|req| {
+    let id = req.params.get("id").unwrap();
+    MockResponse::json(&User { id: id.parse().unwrap(), username: "alice".into() })
+}));
+
+// One-time response (consumed after first match)
+worker.handle(rest::get("/api/users").once().respond(MockResponse::json(&users)));
+
+// Delayed response
+worker.handle(rest::get("/api/slow").delay(Duration::from_millis(500)).respond(MockResponse::json(&data)));
+
+// Network error simulation
+worker.handle(rest::get("/api/fail").network_error());
+```
+
+### MockResponse
+
+```rust
+use reinhardt_test::msw::MockResponse;
+
+MockResponse::json(&data)            // Status 200, content-type: application/json
+MockResponse::text("hello")          // Status 200, content-type: text/plain
+MockResponse::empty()                // Status 200, empty body
+    .with_status(404)                // Override status code
+    .with_header("x-custom", "val") // Add header
+```
+
+### Type-Safe Server Function Mocking
+
+```rust
+// Mock a server function by its marker type
+worker.handle_server_fn::<login::marker>(|args| {
+    Ok(AuthResponse { success: true, user: Some(UserInfo { username: args.username }) })
+});
+
+// With DI context
+use reinhardt_test::msw::TestContext;
+
+let ctx = TestContext::new()
+    .insert(MockDb { users: vec!["alice".into()] });
+
+worker.handle_server_fn_with_context::<get_users::marker>(ctx, |args, ctx| {
+    let db = ctx.get::<MockDb>();
+    Ok(db.users.clone())
 });
 ```
 
-### Assertions
-
-| Function | Description |
-|----------|-------------|
-| `assert_server_fn_called(path)` | Verify endpoint was called |
-| `assert_server_fn_not_called(path)` | Verify endpoint was NOT called |
-| `assert_server_fn_called_with(path, expected)` | Verify call with specific body |
-| `assert_server_fn_call_count(path, n)` | Verify exact call count |
-
-### Call History
+### Call Recording & Assertions
 
 ```rust
-// Get all mock calls
-let history = get_call_history();
+// Query calls by URL pattern
+worker.calls_to("/api/users").assert_called();
+worker.calls_to("/api/users").assert_not_called();
+worker.calls_to("/api/users").assert_count(3);
+worker.calls_to("/api/users").count();           // -> usize
+worker.calls_to("/api/users").first();           // -> Option<RecordedRequest>
+worker.calls_to("/api/users").last();            // -> Option<RecordedRequest>
+worker.calls_to("/api/users").nth(1);            // -> Option<RecordedRequest>
+worker.calls_to("/api/users").all();             // -> Vec<RecordedRequest>
 
-// Get calls for specific endpoint
-let calls = get_call_history_for("/api/server_fn/login");
-for call in calls {
-    println!("Called with: {:?}", call);
-}
+// Type-safe server function call assertions
+worker.calls_to_server_fn::<login::marker>().assert_called();
+worker.calls_to_server_fn::<login::marker>().assert_count(1);
+worker.calls_to_server_fn::<login::marker>().last_args();                    // -> Option<Args>
+worker.calls_to_server_fn::<login::marker>().assert_called_with(&expected);  // Args: PartialEq + Debug
+
+// All recorded calls
+let all = worker.all_calls(); // -> Vec<RecordedRequest>
 ```
 
-### Cleanup
-
-Always clear mocks after tests:
+### rstest Fixtures
 
 ```rust
+use reinhardt_test::fixtures::wasm::msw::{msw_worker, msw_worker_passthrough};
+
+// Auto-started with UnhandledPolicy::Error
+#[rstest]
 #[wasm_bindgen_test]
-async fn test_something() {
-    mock_server_fn("/api/endpoint", &data);
-    // ... test ...
-    clear_mocks(); // Required cleanup
+async fn test_strict(#[future] msw_worker: MockServiceWorker) {
+    let worker = msw_worker.await;
+    // Unhandled requests will error
+}
+
+// Auto-started with UnhandledPolicy::Passthrough
+#[rstest]
+#[wasm_bindgen_test]
+async fn test_lenient(#[future] msw_worker_passthrough: MockServiceWorker) {
+    let worker = msw_worker_passthrough.await;
+    // Unhandled requests pass through to real fetch
 }
 ```
-
-## MockableServerFn (MSW-style)
-
-Requires `msw` feature flag in `Cargo.toml`:
-
-```toml
-[dev-dependencies]
-reinhardt-pages = { workspace = true, features = ["testing", "msw"] }
-```
-
-Enables the `MockableServerFn` trait for type-safe mocking of individual server functions.
 
 ## Feature Flags for Testing
 
 | Feature | Description |
 |---------|-------------|
-| `testing` | Core testing utilities (mock_fetch, mock_http) |
-| `msw` | MockableServerFn trait for MSW-style mocking |
-| `debug-hooks` | Debug hooks (use_debug_value) |
+| `testing` | Core testing utilities |
+| `msw` | MockServiceWorker + MockableServerFn trait |
+| `debug-hooks` | Debug hooks (`use_debug_value`) |
 
 ```toml
 # Cargo.toml
 [dev-dependencies]
-reinhardt-pages = { workspace = true, features = ["testing"] }
+reinhardt-pages = { workspace = true, features = ["testing", "msw"] }
+reinhardt-test = { workspace = true, features = ["msw"] }
 wasm-bindgen-test = "0.3"
 ```
+
+## Deprecated APIs
+
+> **Since v0.1.0-rc.16**: The following APIs are deprecated. Use `MockServiceWorker` instead.
+
+| Deprecated | Replacement |
+|------------|-------------|
+| `mock_server_fn(path, &data)` | `worker.handle_server_fn::<T>(...)` or `worker.handle(rest::post(...).respond(...))` |
+| `mock_server_fn_error(path, status, msg)` | `worker.handle(rest::post(path).respond(MockResponse::text(msg).with_status(status)))` |
+| `mock_server_fn_custom(path, response)` | `worker.handle(rest::post(path).respond(...))` |
+| `MockFetch` | `MockServiceWorker` |
+| `assert_server_fn_called(path)` | `worker.calls_to(path).assert_called()` |
+| `assert_server_fn_not_called(path)` | `worker.calls_to(path).assert_not_called()` |
+| `assert_server_fn_called_with(path, body)` | `worker.calls_to_server_fn::<T>().assert_called_with(&args)` |
+| `assert_server_fn_call_count(path, n)` | `worker.calls_to(path).assert_count(n)` |
+| `clear_mocks()` | `worker.reset()` (or Drop auto-cleanup) |
 
 ## cfg_aliases in Tests
 
@@ -152,5 +244,5 @@ Ensure `build.rs` is set up for `wasm`/`native` aliases (see routing-ssr.md). Bo
 - Follow AAA pattern: `// Arrange`, `// Act`, `// Assert`
 - Server function unit tests: `#[tokio::test]` with rstest
 - WASM component tests: `#[wasm_bindgen_test]` with rstest
-- Always call `clear_mocks()` in test teardown
+- Use `MockServiceWorker` fixtures (`msw_worker`) — cleanup is automatic via Drop
 - Use `reinhardt-query` for SQL in tests, NEVER raw SQL
