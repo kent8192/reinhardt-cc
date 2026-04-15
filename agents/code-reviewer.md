@@ -25,6 +25,9 @@ Specialized agent for reviewing reinhardt-web application code against project c
 - [ ] Explicit `pub use` re-exports (no `pub use module::*`)
 - [ ] Visibility control: private submodules with public API via `pub use`
 
+### Scaffolding & Naming
+- [ ] Project and app names do not start with `reinhardt_` or `reinhardt-` (reserved namespace)
+
 ### Dependencies
 - [ ] No `reinhardt-test = { workspace = true }` in functional crate `[dev-dependencies]`
 - [ ] Delion plugins depend on `reinhardt` facade, not `reinhardt-dentdelion` directly
@@ -44,7 +47,7 @@ Specialized agent for reviewing reinhardt-web application code against project c
 - [ ] No duplicate `TypeId` registrations (use newtype wrappers for same-type multiple registrations)
 - [ ] No `#[injectable]` or `#[injectable_factory]` for framework-managed types (`reinhardt::*`) — use newtype wrapper
 - [ ] Prefer `try_unwrap()` over `into_inner()` for non-Clone types in `Depends<T>` / `Injected<T>`
-- [ ] `cargo reinhardt check-di --validate` passes
+- [ ] `cargo run --bin check-di -- --validate` passes
 
 ### API Design
 - [ ] Serializer fields match model fields

@@ -30,11 +30,11 @@ Guide developers through DI configuration using reinhardt-di, including service 
 
 ## Important Rules
 
-- Types implementing `Default + Clone + Send + Sync + 'static` get auto-injection
+- All injectable types MUST be explicitly registered (`#[injectable_factory]`, `#[injectable]`, or manual `impl Injectable`) — there is no auto-injection for `Default` types
 - Custom injection logic requires `#[async_trait] impl Injectable` (method is `inject`, not `resolve`)
 - Prefer `#[injectable_factory]` for registering dependencies (async, explicit scope, auto-registered)
 - `Injected<T>` is the wrapper type (NOT `Inject<T>` — that type does not exist)
-- Reinhardt DI checks: override registry → request scope → singleton → auto-injectable
+- Reinhardt DI checks: global registry → scope cache → pre-seeded values → `DependencyNotRegistered` error
 - Circular dependencies are detected at runtime and return `Err(DiError::CircularDependency)` — they do NOT panic
 - `#[use_inject]` enables `#[inject]` in general async functions (not just handlers)
 - Test overrides use `ctx.dependency(factory_fn).override_with(value)` for `#[injectable]` functions
@@ -42,7 +42,7 @@ Guide developers through DI configuration using reinhardt-di, including service 
 - `Depends<T>` requires only `T: Send + Sync + 'static` (NOT `T: Clone`); `into_inner()` requires Clone, but `try_unwrap()` does not
 - `DependencyRegistry::register()` panics on duplicate `TypeId` — use newtype wrappers for multiple registrations of the same type
 - Users CANNOT register injectables for framework-managed types (`reinhardt::*`, `reinhardt_*::*` namespaces) — wrap in newtypes (pseudo orphan rule)
-- Run `cargo reinhardt check-di --validate` to verify missing deps, scope violations, circular deps, and orphan rule compliance
+- Run `cargo run --bin check-di -- --validate` to verify missing deps, scope violations, circular deps, and orphan rule compliance
 
 ## Dynamic References
 

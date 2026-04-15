@@ -215,7 +215,7 @@ impl UserViewSet {
 
 **Crate:** `reinhardt-core/macros`
 
-Register URL patterns for automatic discovery.
+Register URL patterns for automatic discovery. The macro forces `pub` visibility on the decorated function and automatically emits `#[allow(private_interfaces)]`, so returning a newtype-wrapped `UnifiedRouter` (e.g., `pub(crate)` types required by the DI pseudo orphan rule) does not produce warnings.
 
 ```rust
 #[routes]
@@ -224,6 +224,21 @@ fn routes() -> UnifiedRouter {
         .mount("/api/users/", user_views::routes())
         .mount("/api/posts/", post_views::routes())
 }
+```
+
+Newtype pattern (required when the pseudo orphan rule applies to router types):
+
+```rust
+pub(crate) struct AppRouter(pub UnifiedRouter);
+
+#[routes]
+fn routes() -> AppRouter {
+    AppRouter(
+        UnifiedRouter::new()
+            .mount("/api/", app_routes())
+    )
+}
+// No `private_interfaces` warning — suppressed by the macro
 ```
 
 ---

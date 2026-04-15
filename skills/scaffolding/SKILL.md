@@ -23,7 +23,7 @@ Guide developers through creating new reinhardt-web projects and adding apps wit
 
 ### New Project
 
-1. **Ask project name** — must be a valid Rust crate name (lowercase, underscores)
+1. **Ask project name** — must be a valid Rust crate name (lowercase, underscores). Names starting with `reinhardt_` or `reinhardt-` are **rejected** (conflicts with DI pseudo orphan rule)
 2. **Ask template type** — read `references/project-templates.md` for options
 3. **Guide feature selection** — read `references/feature-flags.md` for presets and individual features
 4. **Ask DB backend** — postgres (recommended), mysql, sqlite, cockroachdb, or none
@@ -37,7 +37,7 @@ Guide developers through creating new reinhardt-web projects and adding apps wit
 
 ### Adding an App
 
-1. **Ask app name** — lowercase, singular (e.g., "user", "post", "order")
+1. **Ask app name** — lowercase, singular (e.g., "user", "post", "order"). Names starting with `reinhardt_` or `reinhardt-` are **rejected** (conflicts with DI pseudo orphan rule)
 2. **Ask template type** — restful (default) or mtv (Pages)
 3. **Execute**:
    ```bash
@@ -48,6 +48,7 @@ Guide developers through creating new reinhardt-web projects and adding apps wit
 
 ## Important Rules
 
+- Project and app names MUST NOT start with `reinhardt_` or `reinhardt-` — these are reserved for the framework namespace (DI pseudo orphan rule). Cargo normalizes hyphens to underscores, so `reinhardt-myapp` becomes `reinhardt_myapp::*` which overlaps with the reserved `reinhardt_*` namespace
 - ALWAYS use Rust 2024 Edition module system: `module.rs` + `module/` directory, NEVER `mod.rs`
 - If generated templates contain `mod.rs` files, convert them to the new module system
 - ALL code comments must be in English

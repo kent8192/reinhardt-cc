@@ -103,7 +103,7 @@ The `RegistryValidator` performs startup sanity checks on the DI registry:
 Run validation with the CLI:
 
 ```bash
-cargo reinhardt check-di --validate
+cargo run --bin check-di -- --validate
 ```
 
 ### Pseudo Orphan Rule
@@ -114,6 +114,8 @@ Users **CANNOT** register `#[injectable_factory]` or `#[injectable]` for types i
 - `reinhardt::`, `reinhardt_admin::`, `reinhardt_di::`, `reinhardt_core::`
 - `reinhardt_auth::`, `reinhardt_db::`, `reinhardt_rest::`
 - All other `reinhardt_*` crate namespaces
+
+The `startproject` and `startapp` commands also reject names starting with `reinhardt_` or `reinhardt-`, because Cargo normalizes hyphens to underscores, placing all types under the reserved `reinhardt_*::*` namespace.
 
 If you need to customize a framework type, wrap it in a newtype:
 
@@ -272,26 +274,20 @@ Type alias for `Option<Injected<T>>`. Used with `#[inject(optional = true)]`:
 
 ---
 
-## Auto-Injectable Types
+## Registration Requirement
 
-Any type that implements `Default + Clone + Send + Sync + 'static` is automatically injectable without registration. Reinhardt DI creates instances using `Default::default()`.
+All injectable types **MUST** be explicitly registered. There is no auto-injection for `Default` types. Use one of:
 
-```rust
-#[derive(Debug, Clone, Default)]
-pub struct AppConfig {
-    pub debug: bool,
-    pub max_retries: u32,
-}
+| Method | When |
+|--------|------|
+| `#[injectable_factory]` | Async factory with explicit scope (recommended) |
+| `#[injectable]` on struct | Struct with `#[inject]` / `#[no_inject]` field attributes |
+| `#[injectable]` on function | Function that produces the type |
+| `impl Injectable` manually | Custom resolution logic |
 
-// No registration needed — auto-injectable.
-#[get("/config/", name = "show_config")]
-pub async fn show_config(
-    #[inject] config: AppConfig,
-) -> ViewResult<Response> {
-    Ok(Response::new(StatusCode::OK)
-        .with_body(json::to_vec(&json!({ "debug": config.debug }))?))
-}
-```
+Unregistered types return `DiError::DependencyNotRegistered` at runtime.
+
+> **Note:** The `Injectable` trait doc comment in reinhardt-web mentions auto-injection for `Default + Clone` types, but this is not implemented (tracked in kent8192/reinhardt-web#3501).
 
 ---
 
@@ -340,7 +336,7 @@ pub trait Injectable: Sized + Send + Sync + 'static {
 | Type | Behavior |
 |------|----------|
 | `Depends<T>` where `T: Send + Sync + 'static` | Resolves `T` with DI metadata and caching |
-| `Option<T>` where `T: Injectable + Clone` | Returns `Some(T)` on success, `None` on any error |
+| `Option<T>` where `T: Injectable` | Returns `Some(T)` on success, `None` on any error |
 
 ---
 
@@ -425,11 +421,10 @@ pub async fn process_order(
 
 When resolving a type `T`:
 
-1. Check override registry (test overrides)
-2. Check request-scoped cache
-3. Check singleton registrations
-4. Check auto-injectable (if `T: Default + Clone + Send + Sync + 'static`)
-5. Return `DiError::NotFound` if none matched
+1. Check global registry for registered scope
+2. If registered: check scope cache (singleton/request) → execute factory on miss
+3. If not registered: check singleton/request caches for pre-seeded values (via `set_singleton()` / `set_request()`)
+4. Return `DiError::DependencyNotRegistered` if none matched
 
 ---
 
@@ -685,7 +680,7 @@ DiError::Authentication(String)              // Maps to HTTP 401
 |----------|-------------------|
 | Complex async initialization | `#[injectable_factory]` |
 | Struct with injected fields | `#[injectable]` on struct |
-| Simple type with `Default` | Auto-injectable (no registration) |
+| Simple type with `Default` | `#[injectable_factory]` with `Default::default()` body |
 | Custom resolution logic | `impl Injectable` manually |
 | Endpoint DI | `#[inject]` in `#[get]`/`#[post]` etc. |
 | General function DI | `#[use_inject]` + `#[inject]` |
